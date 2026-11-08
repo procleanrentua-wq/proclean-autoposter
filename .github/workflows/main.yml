@@ -2,16 +2,13 @@ name: PRO-CLEAN RENT AutoPoster 2x Daily (08:45 & 19:15 Kyiv)
 
 on:
   schedule:
-    # 1) Ранковий кавовий пік у Дрогобицькій громаді: щодня о 08:45 за Києвом (06:45 UTC)
     - cron: '45 6 * * *'
-    # 2) Вечірній прайм-тайм після роботи: щодня о 19:15 за Києвом (17:15 UTC)
     - cron: '15 17 * * *'
 
-  # Ручний запуск у будь-який момент кнопкою "Run workflow"
   workflow_dispatch:
     inputs:
       topic_index:
-        description: 'Номер теми від 0 до 6 (залиште порожнім для автоматичного вибору)'
+        description: 'Номер теми від 0 до 7 (залиште порожнім для автоматичного вибору)'
         required: false
         default: ''
 
@@ -25,12 +22,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Set up Python 3.11 & Pillow
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Generate new realistic photo + text and publish to FB & Instagram
+      - name: Install Pillow & Fonts for card generation
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y fonts-dejavu-core
+          pip install --quiet Pillow
+
+      - name: Generate weather & holiday post + hybrid card and publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -40,12 +42,6 @@ jobs:
           FORCE_TOPIC_INDEX: ${{ github.event.inputs.topic_index }}
         run: |
           if [ -z "$FORCE_TOPIC_INDEX" ]; then
-            HOUR_UTC=$(date -u +%H)
-            DAY_OF_YEAR=$(date -u +%j | sed 's/^0*//')
-            if [ "$HOUR_UTC" -lt 12 ]; then
-              export FORCE_TOPIC_INDEX=$(( (DAY_OF_YEAR * 2) % 7 ))
-            else
-              export FORCE_TOPIC_INDEX=$(( (DAY_OF_YEAR * 2 + 1) % 7 ))
-            fi
+            unset FORCE_TOPIC_INDEX
           fi
           python3 autopost.py

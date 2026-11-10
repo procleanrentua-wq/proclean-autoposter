@@ -1,19 +1,11 @@
 #!/usr/bin/env python3
 """
-PRO-CLEAN RENT v3.1 — Smart Weather, Holiday Countdown, Stain Lifehacks & Hybrid B+C Card Generator.
-Працює двічі на день (08:45 та 19:15 за Києвом) через GitHub Actions:
-
-1. Перевіряє РЕАЛЬНУ погоду в м. Дрогобич просто зараз через безкоштовний Open-Meteo API
-   (температура, сніг, дощ, мряка, туман, ясно, вологість).
-2. Визначає сьогоднішній день тижня, українські свята, традиції та точний відлік днів до подій
-   (Святий Миколай 6 грудня, Різдво 25 грудня, Новий рік 1 січня, Великдень тощо).
-3. Чергує 8 живих рубрик (включно з 4 глибокими рубриками лайфхаків виведення плям із тканини:
-   кава/вино, дитячі несподіванки/сеча тварин, жир/шоколад/віск, чорнило/фломастери/кров).
-4. Генерує ідеальну чітку картку 1080x1080 (Суміш Варіантів Б і В — жодних кривих ШІ-кімнат!):
-   - Для фону завантажує чистий макро-кадр реальної текстури (тканина дивана, краплі дощу або
-     сніжинки на вікні — без жодних меблів чи фальшивих апаратів!) або використовує преміум-банер.
-   - Зверху накладає живу шапку з сьогоднішньою погодою в Дрогобичі та відліком днів до свята,
-     великий заголовок теми, фото реальної техніки PRO-CLEAN RENT та жовту плашку ціни!
+PRO-CLEAN RENT v3.2 — Smart Weather, Holiday Countdown, Stain Lifehacks & Bulletproof API Engine.
+Виправлено у v3.2:
+1. Автоматичний пошук актуальної моделі Gemini через ListModels API (більше жодних 404 Not Found при оновленні моделей Google!).
+2. Оновлено версію Meta Graph API до актуальної v27.0 (замість застарілої v21.0, яка дає 400 Bad Request).
+3. Пряме бінарне завантаження фото (multipart/form-data) на сторінку Facebook (без очікування кешу GitHub CDN!).
+4. Детальний вивід точної відповіді сервера Meta у лог, якщо токен коли-небудь потребуватиме оновлення.
 """
 
 import datetime
@@ -26,10 +18,14 @@ import subprocess
 import sys
 import textwrap
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+GRAPH_API_VERSION = "v27.0"
 
 BUSINESS_CONTEXT = """
 Ти — досвідчений локальний SMM-експерт та майстер хімчистки сервісу PRO-CLEAN RENT у м. Дрогобич (ФОП Собко Андрій Тарасович).
@@ -176,12 +172,10 @@ WMO_WEATHER_UA = {
 
 
 def strip_non_bmp(text: str) -> str:
-    """Прибирає кольорові емодзі для малювання на зображенні через стандартні TTF-шрифти (щоб не було квадратиків)."""
     return re.sub(r"[^\u0000-\u27BF]", "", text).strip()
 
 
 def get_drohobych_weather() -> dict:
-    """Отримує реальну погоду в м. Дрогобич просто зараз через безкоштовний Open-Meteo API."""
     url = (
         "https://api.open-meteo.com/v1/forecast"
         "?latitude=49.35&longitude=23.50"
@@ -189,7 +183,7 @@ def get_drohobych_weather() -> dict:
         "&timezone=Europe%2FKyiv"
     )
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "ProCleanDrohobych/3.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "ProCleanDrohobych/3.2"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))["current"]
             temp = round(float(data.get("temperature_2m", 5.0)))
@@ -224,7 +218,6 @@ def get_drohobych_weather() -> dict:
 
 
 def get_ukrainian_calendar_context(now_kyiv: datetime.datetime) -> dict:
-    """Визначає сьогоднішній день тижня, українські свята, традиції та точний відлік днів до подій."""
     today = now_kyiv.date()
     year = today.year
 
@@ -240,9 +233,9 @@ def get_ukrainian_calendar_context(now_kyiv: datetime.datetime) -> dict:
     date_human = f"{today.day} {months_genitive[today.month]}"
     is_morning = now_kyiv.hour < 14
     time_of_day_hint = (
-        "Ранковий кавовий час (08:45 ранку) — люди у Дрогобичі п'ють ранкову каву, збираються у справах і планують свій день."
+        "Ранковий кавовий час — люди у Дрогобичі п'ють ранкову каву, збираються у справах і планують свій день."
         if is_morning else
-        "Вечірній прайм-тайм (19:15 вечора) — люди повернулися з роботи додому, відпочивають на дивані й планують справи на завтра."
+        "Вечірній прайм-тайм — люди повернулися з роботи додому, відпочивають на дивані й планують справи на завтра."
     )
 
     holidays = [
@@ -307,10 +300,50 @@ def get_ukrainian_calendar_context(now_kyiv: datetime.datetime) -> dict:
     }
 
 
+def discover_gemini_models(gemini_api_key: str) -> list[str]:
+    """Автоматично запитує у Google список актуальних моделей Gemini, щоб ніколи не було 404 Not Found."""
+    fallback_candidates = [
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash",
+    ]
+    list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_api_key}"
+    try:
+        req = urllib.request.Request(list_url, headers={"User-Agent": "ProCleanAutoPoster/3.2"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            found_flash = []
+            found_other = []
+            skip_words = ("tts", "image", "embedding", "aqa", "audio", "vision", "veo", "imagen", "robotics")
+            for m in data.get("models", []):
+                methods = m.get("supportedGenerationMethods", [])
+                name = m.get("name", "")
+                if "generateContent" not in methods or not name.startswith("models/gemini"):
+                    continue
+                short_name = name.replace("models/", "")
+                if any(sw in short_name.lower() for sw in skip_words):
+                    continue
+                if "flash" in short_name.lower():
+                    found_flash.append(short_name)
+                else:
+                    found_other.append(short_name)
+            # Сортуємо за спаданням версії (найновіші моделі першими)
+            found_flash.sort(reverse=True)
+            found_other.sort(reverse=True)
+            combined = found_flash + found_other
+            if combined:
+                print(f"Знайдено активні моделі Gemini для ключа: {combined[:5]}")
+                return combined[:5]
+    except Exception as exc:
+        print(f"Не вдалося отримати динамічний список моделей ({exc}), використовуємо резервний список.")
+    return fallback_candidates
+
+
 def generate_live_caption_with_gemini(
     rubric: dict, weather: dict, cal: dict, gemini_api_key: str
 ) -> str:
-    """Генерує 100% унікальний живий пост з урахуванням погоди в Дрогобичі, календаря свят і лайфхаку."""
     if not gemini_api_key:
         return build_dynamic_fallback_caption(rubric, weather, cal)
 
@@ -326,21 +359,21 @@ def generate_live_caption_with_gemini(
 СУВОРІ ВИМОГИ ДО ТЕКСТУ:
 - У перших 1–2 реченнях природно й живо згадай сьогоднішню погоду у Дрогобичі (температуру {weather['temp']}°C, стан неба: {weather['short_desc']}) ТА/АБО скільки днів залишилося до найближчого свята ({cal['short_countdown_badge']}) чи який сьогодні день тижня ({cal['weekday_name']}). Пиши так, ніби ти сам щойно виглянув у вікно в Дрогобичі!
 - Далі детально й цікаво розкрий тему сьогоднішньої рубрики (особливо якщо це лайфхак із виведення плям — дай реальну практичну користь, щоб люди зберегли собі пост у закладки!).
-- Природно підведи до рішення від PRO-CLEAN RENT з точними цінами (наприклад, оренда Kärcher Puzzi 8/1 — 600 грн/доба з хімією у комплекті, Sabrina SW15 — 650 грн, КОМБО з турбосушкою чи пароочисником — 850 грн, або виїзд нашого майстра).
+- Природно підведи до рішення від PRO-CLEAN RENT з точними цінами (наприклад, оренда Kärcher Puzzi 8/1 — 600 грн/доба з хімією у комплекті, Sabrina SW15 — 650 грн, КОМБО з турбосушкою чи пароочисником — 850–900 грн, або виїзд нашого майстра).
 - Обов'язково вкажи клікабельне посилання на наш сайт із калькулятором: https://proclean-drohobych.netlify.app
 - Обов'язково вкажи телефон / Viber / Telegram: 098-521-02-04.
 - У кінці додай 6–8 локальних хештегів (#дрогобич #трускавець #борислав #стебник #східниця #хімчисткадрогобич #орендадрогобич #procleanrent).
 - НЕ використовуй зірочки (** або *), НЕ пиши слово "Заголовок:", поверни тільки чистий готовий текст допису з гарними абзацами та емодзі.
 """
 
-    models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    models = discover_gemini_models(gemini_api_key)
     for model_name in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_api_key}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.85,
-                "maxOutputTokens": 1200,
+                "maxOutputTokens": 1400,
             },
         }
         req = urllib.request.Request(
@@ -350,13 +383,17 @@ def generate_live_caption_with_gemini(
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=35) as resp:
+            with urllib.request.urlopen(req, timeout=40) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-                text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                parts = data["candidates"][0]["content"]["parts"]
+                text = "".join(p.get("text", "") for p in parts).strip()
                 text = text.replace("**", "")
                 if len(text) > 150:
-                    print(f"Унікальний текст успішно згенеровано через {model_name}!")
+                    print(f"Унікальний живий текст успішно згенеровано через {model_name}!")
                     return text
+        except urllib.error.HTTPError as exc:
+            err_body = exc.read().decode("utf-8", errors="replace")[:300]
+            print(f"Модель {model_name} повернула HTTP {exc.code}: {err_body}")
         except Exception as exc:
             print(f"Модель {model_name} повернула помилку ({exc}), пробуємо наступну...")
 
@@ -398,29 +435,22 @@ def load_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
 
 
 def fetch_macro_texture_bg(macro_prompt: str) -> Image.Image | None:
-    """Завантажує чистий макро-фон фактури (тканина, краплі на склі) без жодних кімнат і без апаратів."""
     seed = random.randint(1000, 999999)
     encoded = urllib.parse.quote(macro_prompt)
     url = f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1080&seed={seed}&model=flux-realism&nologo=true"
-    req = urllib.request.Request(url, headers={"User-Agent": "ProCleanAutoPoster/3.1"})
+    req = urllib.request.Request(url, headers={"User-Agent": "ProCleanAutoPoster/3.2"})
     try:
-        with urllib.request.urlopen(req, timeout=45) as resp:
+        with urllib.request.urlopen(req, timeout=35) as resp:
             raw = resp.read()
             if len(raw) > 15000:
                 im = Image.open(io.BytesIO(raw)).convert("RGB")
                 return im.resize((1080, 1080), Image.Resampling.LANCZOS)
     except Exception as exc:
-        print(f"Макро-фон недоступний ({exc}) — використовуємо преміальний темно-синій фон.")
+        print(f"Макро-фон недоступний ({exc}) — використовуємо фірмовий темно-синій фон.")
     return None
 
 
 def build_hybrid_card_image(rubric: dict, weather: dict, cal: dict, out_path: str) -> None:
-    """
-    Генерує 100% чітку, реалістичну і живу картку 1080x1080 (Суміш Варіантів Б і В):
-    - Жодних кривих ШІ-кімнат чи вигаданих пилососів!
-    - Використовує ВИКЛЮЧНО високої роздільної здатності фото техніки та інфографіки у центрі
-      + живу верхню панель із погодою в Дрогобичі та зворотним відліком до свята!
-    """
     W, H = 1080, 1080
     canvas = Image.new("RGB", (W, H), (15, 23, 42))
 
@@ -440,24 +470,20 @@ def build_hybrid_card_image(rubric: dict, weather: dict, cal: dict, out_path: st
     f_price = load_font(31, bold=True)
     f_footer = load_font(23, bold=True)
 
-    # 1. Верхня жива панель: Погода в Дрогобичі + Відлік до свята (без емодзі, які дають квадратики)
     draw.rounded_rectangle([32, 24, 1048, 88], radius=16, fill=(30, 41, 59), outline=(56, 189, 248), width=2)
     top_bar_text = strip_non_bmp(f"{weather['badge_str']}   |   {cal['short_countdown_badge']}")
     draw.text((52, 43), top_bar_text[:66], font=f_weather, fill=(125, 211, 252))
 
-    # 2. Жовта плашка рубрики
     badge_clean = strip_non_bmp(rubric["badge"])
     draw.rounded_rectangle([32, 104, 520, 152], radius=12, fill=(250, 204, 21))
     draw.text((50, 114), badge_clean, font=f_badge, fill=(15, 23, 42))
 
-    # 3. Заголовок теми (повністю вміщається в 2 рядки без обрізання!)
     wrapped_head = textwrap.wrap(strip_non_bmp(rubric["headline"]), width=42)[:2]
     y_cursor = 166
     for line in wrapped_head:
         draw.text((36, y_cursor), line, font=f_head, fill=(255, 255, 255))
         y_cursor += 46
 
-    # 4. Центральна вітрина з високої якості фото з images/assets/
     card_top = 274
     card_bottom = 788
     draw.rounded_rectangle(
@@ -479,28 +505,26 @@ def build_hybrid_card_image(rubric: dict, weather: dict, cal: dict, out_path: st
         paste_y = card_top + (514 - im_main.height) // 2
         canvas.paste(im_main, (paste_x, paste_y))
 
-    # Маленький бейдж реального апарата у правому нижньому кутку вітрини
     mini_name = rubric.get("mini_badge_img")
     mini_path = os.path.join("images", "assets", mini_name) if mini_name else None
     if mini_path and os.path.exists(mini_path):
         draw.rounded_rectangle([810, card_bottom - 155, 1032, card_bottom - 14], radius=18, fill=(255, 255, 255), outline=(56, 189, 248), width=3)
         im_mini = Image.open(mini_path).convert("RGB")
+        if im_mini.height > 100:
+            im_mini = im_mini.crop((0, 18, im_mini.width, im_mini.height))
         im_mini.thumbnail((196, 120), Image.Resampling.LANCZOS)
         canvas.paste(im_mini, (810 + (222 - im_mini.width) // 2, (card_bottom - 155) + (141 - im_mini.height) // 2))
 
-    # 5. Підзаголовок-вигода
     wrapped_sub = textwrap.wrap(strip_non_bmp(rubric["subline"]), width=62)[:2]
     y_sub = 802
     for line in wrapped_sub:
         draw.text((38, y_sub), line, font=f_sub, fill=(226, 232, 240))
         y_sub += 32
 
-    # 6. Яскрава жовта плашка з ціною
     draw.rounded_rectangle([32, 878, 1048, 962], radius=18, fill=(250, 204, 21))
     price_clean = strip_non_bmp(rubric["price_tag"])
     draw.text((54, 903), f">> {price_clean}", font=f_price, fill=(15, 23, 42))
 
-    # 7. Футер із контактами та географією
     draw.text(
         (38, 982),
         "Тел / Viber / TG: 098-521-02-04  •  Дрогобич • Трускавець • Борислав • Стебник",
@@ -524,49 +548,85 @@ def commit_and_push_generated_image(rel_image_path: str) -> bool:
         subprocess.run(["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"], check=True)
         subprocess.run(["git", "add", rel_image_path], check=True)
         subprocess.run(["git", "commit", "-m", f"Update daily smart card: {rel_image_path}"], check=False)
+        subprocess.run(["git", "pull", "--rebase"], check=False)
         subprocess.run(["git", "push"], check=True)
-        print("Свіжу картку дня збережено в GitHub репозиторії!")
+        print("Свіжу картку дня збережено в GitHub репозиторії! Чекаємо 5 с на оновлення CDN...")
+        time.sleep(5)
         return True
     except Exception as exc:
         print(f"Не вдалося запушити картинку в git ({exc}).")
         return False
 
 
-def publish_to_facebook_page(page_id: str, access_token: str, image_url: str, caption: str) -> dict:
-    endpoint = f"https://graph.facebook.com/v21.0/{page_id}/photos"
-    form_data = urllib.parse.urlencode({
-        "url": image_url,
-        "caption": caption,
-        "access_token": access_token,
-    }).encode("utf-8")
-    req = urllib.request.Request(endpoint, data=form_data, method="POST")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+def publish_to_facebook_page_binary(page_id: str, access_token: str, local_image_path: str, caption: str) -> dict:
+    """Завантажує фото напряму бінарним файлом (multipart/form-data) через актуальний Graph API v27.0!"""
+    endpoint = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/photos"
+    boundary = f"----ProCleanBoundary{uuid.uuid4().hex}"
+
+    with open(local_image_path, "rb") as f:
+        img_bytes = f.read()
+
+    body = io.BytesIO()
+    for field_name, field_val in [("caption", caption), ("access_token", access_token)]:
+        body.write(f"--{boundary}\r\n".encode("utf-8"))
+        body.write(f'Content-Disposition: form-data; name="{field_name}"\r\n\r\n'.encode("utf-8"))
+        body.write(field_val.encode("utf-8"))
+        body.write(b"\r\n")
+
+    body.write(f"--{boundary}\r\n".encode("utf-8"))
+    body.write(b'Content-Disposition: form-data; name="source"; filename="daily_smart_card.jpg"\r\n')
+    body.write(b"Content-Type: image/jpeg\r\n\r\n")
+    body.write(img_bytes)
+    body.write(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+
+    req = urllib.request.Request(
+        endpoint,
+        data=body.getvalue(),
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        err_json = exc.read().decode("utf-8", errors="replace")
+        print(f"❌ Детальна відповідь Facebook API (HTTP {exc.code}): {err_json}")
+        raise
 
 
 def publish_to_instagram_business(ig_user_id: str, access_token: str, image_url: str, caption: str) -> dict:
-    create_url = f"https://graph.facebook.com/v21.0/{ig_user_id}/media"
+    create_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_user_id}/media"
     create_data = urllib.parse.urlencode({
         "image_url": image_url,
         "caption": caption,
         "access_token": access_token,
     }).encode("utf-8")
     req1 = urllib.request.Request(create_url, data=create_data, method="POST")
-    with urllib.request.urlopen(req1, timeout=30) as resp1:
-        container_info = json.loads(resp1.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req1, timeout=35) as resp1:
+            container_info = json.loads(resp1.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        err_json = exc.read().decode("utf-8", errors="replace")
+        print(f"❌ Детальна відповідь Instagram Media API (HTTP {exc.code}): {err_json}")
+        raise
 
     creation_id = container_info["id"]
     print(f"Instagram медіа-контейнер створено: {creation_id}. Чекаємо 10 секунд на обробку...")
     time.sleep(10)
 
-    publish_url = f"https://graph.facebook.com/v21.0/{ig_user_id}/media_publish"
+    publish_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_user_id}/media_publish"
     publish_data = urllib.parse.urlencode({
         "creation_id": creation_id,
         "access_token": access_token,
     }).encode("utf-8")
     req2 = urllib.request.Request(publish_url, data=publish_data, method="POST")
-    with urllib.request.urlopen(req2, timeout=30) as resp2:
-        return json.loads(resp2.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req2, timeout=35) as resp2:
+            return json.loads(resp2.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        err_json = exc.read().decode("utf-8", errors="replace")
+        print(f"❌ Детальна відповідь Instagram Publish API (HTTP {exc.code}): {err_json}")
+        raise
 
 
 def main():
@@ -608,21 +668,35 @@ def main():
     else:
         image_url = f"https://raw.githubusercontent.com/{github_repo}/{branch}/images/01_park_tekhniky.jpg"
 
-    print(f"URL зображення для публікації: {image_url}")
+    print(f"URL зображення для Instagram: {image_url}")
 
     if not meta_token:
         print("Тестовий запуск (DRY RUN): META_PAGE_ACCESS_TOKEN не задано.")
         sys.exit(0)
 
+    errors = []
+
     if fb_page_id:
-        print(f"Публікуємо на Facebook Page ({fb_page_id})...")
-        fb_res = publish_to_facebook_page(fb_page_id, meta_token, image_url, caption)
-        print("Успішно опубліковано у Facebook! ID:", fb_res.get("id"))
+        print(f"Публікуємо напряму бінарне фото на Facebook Page ({fb_page_id})...")
+        try:
+            fb_res = publish_to_facebook_page_binary(fb_page_id, meta_token, generated_rel_path, caption)
+            print("✅ Успішно опубліковано у Facebook! ID:", fb_res.get("id"))
+        except Exception as exc:
+            errors.append(f"Facebook: {exc}")
 
     if ig_user_id:
         print(f"Публікуємо в Instagram Business ({ig_user_id})...")
-        ig_res = publish_to_instagram_business(ig_user_id, meta_token, image_url, caption)
-        print("Успішно опубліковано в Instagram! ID:", ig_res.get("id"))
+        try:
+            ig_res = publish_to_instagram_business(ig_user_id, meta_token, image_url, caption)
+            print("✅ Успішно опубліковано в Instagram! ID:", ig_res.get("id"))
+        except Exception as exc:
+            errors.append(f"Instagram: {exc}")
+
+    if errors:
+        print("\n⚠️ Виникли помилки під час публікації:")
+        for e in errors:
+            print(" -", e)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

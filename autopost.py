@@ -323,25 +323,38 @@ def wrap_and_fit_text(
     return font, [text]
 
 
-def resolve_topic_image(topic: dict) -> Path:
-    exact = IMAGES_DIR / topic["image"]
-    if exact.exists():
-        return exact
+def resolve_topic_image(topic: dict):
+    from pathlib import Path
 
-    prefix = topic["prefix"]
-    valid_exts = {".jpg", ".jpeg", ".png", ".webp"}
-    all_imgs = [
-        p for p in sorted(IMAGES_DIR.iterdir())
-        if p.is_file() and p.suffix.lower() in valid_exts and p.name.lower() != OUTPUT_CARD.name.lower()
-    ]
-    for p in all_imgs:
-        if p.name.startswith(prefix):
-            return p
+    images_dir = Path(IMAGES_DIR)
+    valid_exts = {".jpg", ".jpeg", ".jfif", ".png", ".webp"}
+    skip_prefixes = ("daily_smart_card", "generated_")
 
-    if not all_imgs:
+    all_files = sorted(
+        p for p in images_dir.iterdir()
+        if p.is_file()
+        and p.suffix.lower() in valid_exts
+        and not p.name.lower().startswith(skip_prefixes)
+    )
+    if not all_files:
         raise FileNotFoundError(f"У папці {IMAGES_DIR} немає вхідних зображень!")
-    all_imgs.sort(key=lambda p: p.stat().st_size, reverse=True)
-    return all_imgs[0]
+
+    candidates = []
+    for val in topic.values():
+        if isinstance(val, str) and val.lower().endswith(tuple(valid_exts)):
+            candidates.append(val.strip())
+        elif isinstance(val, (list, tuple)):
+            for item in val:
+                if isinstance(item, str) and item.lower().endswith(tuple(valid_exts)):
+                    candidates.append(item.strip())
+
+    for cand in candidates:
+        cand_stem = Path(cand).name.lower().split(".")[0]
+        for p in all_files:
+            if p.name.lower().split(".")[0] == cand_stem:
+                return p
+
+    return all_files[0]
 
 
 def render_editorial_card(topic: dict) -> Path:

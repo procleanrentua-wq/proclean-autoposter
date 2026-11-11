@@ -1,702 +1,658 @@
 #!/usr/bin/env python3
 """
-PRO-CLEAN RENT v3.2 — Smart Weather, Holiday Countdown, Stain Lifehacks & Bulletproof API Engine.
-Виправлено у v3.2:
-1. Автоматичний пошук актуальної моделі Gemini через ListModels API (більше жодних 404 Not Found при оновленні моделей Google!).
-2. Оновлено версію Meta Graph API до актуальної v27.0 (замість застарілої v21.0, яка дає 400 Bad Request).
-3. Пряме бінарне завантаження фото (multipart/form-data) на сторінку Facebook (без очікування кешу GitHub CDN!).
-4. Детальний вивід точної відповіді сервера Meta у лог, якщо токен коли-небудь потребуватиме оновлення.
+PRO-CLEAN RENT — Smart Editorial AutoPoster v4.0 (Facebook Page + Instagram Business)
+Локація: м. Дрогобич, Трускавець, Борислав, Стебник, Східниця
+Сайт: https://proclean-drohobych.netlify.app | Тел.: 098 521 02 04
 """
 
-import datetime
+import argparse
+from datetime import datetime
 import io
 import json
 import os
-import random
-import re
+from pathlib import Path
 import subprocess
 import sys
-import textwrap
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from zoneinfo import ZoneInfo
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFont
 
-GRAPH_API_VERSION = "v27.0"
+KYIV_TZ = ZoneInfo("Europe/Kyiv")
+BASE_DIR = Path(__file__).resolve().parent
+IMAGES_DIR = BASE_DIR / "images"
+OUTPUT_CARD = IMAGES_DIR / "daily_smart_card.jpg"
 
-BUSINESS_CONTEXT = """
-Ти — досвідчений локальний SMM-експерт та майстер хімчистки сервісу PRO-CLEAN RENT у м. Дрогобич (ФОП Собко Андрій Тарасович).
-Географія: Дрогобич, Трускавець, Борислав, Стебник, Східниця та села Дрогобицької ОТГ.
-Контакти: Тел / Viber / Telegram / WhatsApp: 098-521-02-04.
-Сайт з онлайн-калькулятором: https://proclean-drohobych.netlify.app
+CANVAS_W = 1080
+CANVAS_H = 1350
+SAFE_MARGIN_X = 80
+MAX_TEXT_W = CANVAS_W - (SAFE_MARGIN_X * 2)  # 920 px (по 80 px відступу з країв)
 
-Наші послуги та точні ціни:
-1) Подобова оренда професійної техніки для самостійної хімчистки (1 порція хімії Kärcher RM 760 у ПОДАРУНОК до кожного пилососа!):
-   - Миючий пилосос Kärcher Puzzi 8/1 (Німеччина, ручна насадка для меблів + висока штанга для килимів) — 600 грн/доба
-   - Потужний італійський екстрактор Santoemma Sabrina SW15 (глибока витяжка з товстих матраців і килимів) — 650 грн/доба
-   - Пароочисник Kärcher SC 2 EasyFix (кухня, жир, духовка, плитка, шви, санвузол без хімії) — 400 грн/доба
-   - Робот для миття вікон Hobot (концентрат RM 503 та серветки у комплекті) — 450 грн/доба
-   - Американська турбосушка Dri-Eaz Dri-Pod (сушить диван чи матрац за 2–3 години замість 24 годин у сиру погоду!) — 350 грн/доба
-   - Професійний озонатор повітря YATO YT-73350 (знищує запахи диму, тварин, сечі, плісняви, вогкості) — 350 грн/доба
-   - Додаткова порція преміум-хімії — 90 грн.
-   - Вигідні КОМБО на добу:
-     * КОМБО №1 «Сухий диван за 2 години» (Пилосос + Турбосушка + хімія) = 850 грн (з Puzzi) / 900 грн (з Sabrina)
-     * КОМБО №2 «Меблі + Кухня та Ванна» (Пилосос + Пароочисник SC 2 + хімія) = 850 грн / 900 грн
-     * КОМБО №3 «Анти-Запах» (Пилосос + Озонатор YATO + хімія) = 850 грн / 900 грн
-     * КОМБО №4 «Ідеальні вікна та шви» (Робот Hobot + Пароочисник SC 2) = 750 грн
-     * КОМБО №5 «Генеральне прибирання All-in-One» (Екстрактор + Пароочисник + Hobot + Турбосушка) = 1450 грн / 1500 грн
-   - Доставка в 1 сторону: Самовивіз (Дрогобич) — 0 грн; по Дрогобичу — 150 грн; Трускавець / Стебник — 200 грн; Борислав — 250 грн; Східниця — 350 грн.
-
-2) Виїзна преміум-хімчистка м'яких меблів, матраців, килимів і салонів авто нашим майстром:
-   - 5-ступенева технологія США та Німеччини: ензимний преспрей Chemspec PreKleen (розщеплює білок, піт, їжу, сечу), екстракція Kärcher RM 760 / Koch Chemie Pol Star, точкові плямовивідники RM 769 / Fleckenwasser та обов'язкова нейтралізація кислотним ополіскувачем Chemspec All Fiber Textile Rinse (100% безпечно для немовлят, алергіків і тварин).
-"""
-
-RUBRICS = [
+TOPICS = [
     {
-        "mode": "BC",
-        "main_photo": "post_instagram_hubka_vs_karcher.jpg",
-        "mini_badge_img": "card_puzzi.jpg",
-        "macro_bg_prompt": "Extreme macro close-up photography of beige linen sofa upholstery fabric weave texture in natural window light, shallow depth of field, zero objects, no rooms, no text",
-        "badge": "ЛАЙФХАК ПРОТИ ПЛЯМ #1",
-        "headline": "Пляма від кави, вина чи соку на дивані: що НЕ можна робити?",
-        "subline": "Губка з Ванішем заганяє бруд у поролон, а екстрактор Puzzi 8/1 витягує його з глибини!",
-        "price_tag": "Оренда Kärcher Puzzi 8/1 + хімія RM 760: 600 грн/доба",
-        "topic_prompt": "Рубрика «Лайфхаки з виведення плям із тканини»: свіжа або застаріла пляма від кави, чаю, червоного вина чи узвару на світлому дивані. Поясни покроково: 1) чому не можна терти губкою з Фейрі чи Ванішем по колу (бо рідина з цукром і танінами йде вглиб поролону і після висихання дає жовтий ореол); 2) як правильно промокнути сухою серветкою з країв до центру; 3) як за допомогою екстрактора Kärcher Puzzi 8/1 та лужного розчину RM 760 витягнути пляму з глибини 7 см назавжди.",
+        "id": "coffee_lifehack",
+        "prefix": "1_",
+        "image": "1_coffee_sofa.jpg",
+        "headline": "Розлили каву на світлий диван?",
+        "subline": "Лайфхак першої хвилини, щоб не запекти пляму",
+        "prompt_focus": (
+            "Напиши живий експертний пост-лайфхак: що робити у перші 2 хвилини, якщо на світлий диван "
+            "розлили каву (з молоком чи без). Поясни 3 правила: 1) не терти по колу, а щільно промокати сухими "
+            "білими рушниками; 2) ніякого окропу й гарячого фена (білок молока і таніни запікаються у волокнах); "
+            "3) не заливати Ванішем чи милом, бо залишиться липке темне коло. Потім м'яко поясни, що глибоку пляму "
+            "з поролону витягує миючий пилосос-екстрактор (Kärcher Puzzi 8/1 — 600 грн/доба або Santoemma Sabrina — "
+            "650 грн/доба) з ензимним преспреєм Chemspec PreKleen та ополіскувачем All Fiber."
+        ),
+        "fallback_text": (
+            "Знайомий ранок, коли чашка свіжої кави раптом опиняється просто на світлому дивані? ☕🛋\n\n"
+            "Головне у перші 60 секунд — не зробити помилку, яка зафіксує пляму у волокнах назавжди:\n"
+            "1. Не тріть ганчіркою по колу — так ви лише заганяєте каву глибше й розширюєте ореол. Щільно притискайте сухі паперові рушники або білу мікрофібру.\n"
+            "2. Ніякої гарячої води чи сушіння феном! Висока температура миттєво «запікає» білок молока та кавовий пігмент.\n"
+            "3. Не заливайте диван побутовим милом чи Ванішем — піна залишиться у поролоні й після висихання дасть темний липкий контур.\n\n"
+            "Якщо ж кава пішла вглиб оббивки або пляма давня — врятує вакуумна промивка. У Дрогобичі ви можете взяти в оренду професійний миючий пилосос Kärcher Puzzi 8/1 (600 грн/доба) або Santoemma Sabrina (650 грн/доба) зі стартовою порцією хімії у комплекті, а для складних плям додати ензимний преспрей Chemspec PreKleen (100 грн).\n\n"
+            "📍 Дрогобич • Трускавець • Борислав • Стебник • Східниця\n"
+            "📞 Бронювання: 098 521 02 04\n"
+            "🌐 Онлайн-калькулятор: https://proclean-drohobych.netlify.app\n"
+            "#дрогобич #трускавець #борислав #стебник #хімчисткадрогобич #орендадрогобич"
+        ),
     },
     {
-        "mode": "BC",
-        "main_photo": "post_facebook_soba_kit_karcher.jpg",
-        "mini_badge_img": "card_sabrina.jpg",
-        "macro_bg_prompt": "Macro close-up photograph of soft grey velour sofa fabric texture in warm daylight, clean textile fibers, no furniture, no rooms, no text",
-        "badge": "ЛАЙФХАК ПРОТИ ПЛЯМ #2",
-        "headline": "Дитячі несподіванки, молоко або сеча кота й собаки на матраці",
-        "subline": "Чому оцет і сода лише консервують запах у поролоні та як працюють ензими Chemspec?",
-        "price_tag": "Виїзна хімчистка Chemspec або Оренда екстрактора: від 600 грн",
-        "topic_prompt": "Рубрика «Лайфхаки з виведення складних білкових плям»: дитяча сеча, пролите молоко, дитяче харчування або мітки домашніх улюбленців на матраці чи дивані. Розповідай живо і професійно: чому замивання водою, оцтом чи содою вступає в реакцію з кристалами сечової кислоти та закріплює запах у поролоні, який повертається у вологу погоду. Дай правильний лайфхак першої допомоги і поясни, як працює наш американський ензимний преспрей Chemspec PreKleen + кислотний ополіскувач All Fiber Textile Rinse та екстрактор Santoemma Sabrina SW15.",
+        "id": "mattress_urine_lifehack",
+        "prefix": "2_",
+        "image": "2_mattress_stain.jpg",
+        "headline": "Пляма чи запах на матраці?",
+        "subline": "Чому сода й оцет роблять лише гірше",
+        "prompt_focus": (
+            "Напиши тактовний, практичний пост-лайфхак для батьків маленьких дітей та власників котів і собак: "
+            "як діяти, якщо на матраці з'явилася пляма сечі чи жовтий ореол. Поясни: 1) одразу витиснути вологу "
+            "сухими рушниками натисканням; 2) чому не можна засипати мокру пляму содою з оцтом і гріти феном/праскою "
+            "(кристалізація солей сечової кислоти + ризик темного ореолу від кокосової койри всередині матраца); "
+            "3) як працює наш готовий хім-набір «Анти-Запах Тварин / Сеча» (250 грн: ензим Chemspec PreKleen + "
+            "нейтралізатор Kill Odor Citrus + ополіскувач All Fiber) у парі з орендою пилососа та турбосушки Dri-Pod."
+        ),
+        "fallback_text": (
+            "У кожному домі, де ростуть маленькі діти або живуть пухнасті улюбленці, матрац рано чи пізно проходить випробування 🐾🛏\n\n"
+            "Що варто зробити у перші хвилини, щоб не залишилося жовтого контуру й запаху:\n"
+            "• Максимально витягніть вологу сухими рушниками, сильно притискаючи їх до матраца без розтирання.\n"
+            "• Не сипте соду з оцтом і не сушіть пляму феном чи праскою — нагрів перетворює сечову кислоту на стійкі кристали солей, які знову пахнуть у вологу погоду.\n"
+            "• Не лийте багато води з губки: якщо в матраці є кокосова койра, зайва волога підтягне з неї темний коричневий ореол.\n\n"
+            "Щоб прибрати і пляму, і запах без перемочування, у PRO-CLEAN RENT у Дрогобичі є готовий хім-набір «Анти-Запах Тварин / Сеча» (250 грн: ензим PreKleen + нейтралізатор Kill Odor Citrus + ополіскувач All Fiber) до оренди миючого пилососа (від 600 грн/доба), а турбосушка Dri-Pod висушить матрац за 2–3 години.\n\n"
+            "📍 м. Дрогобич (самовивіз або доставка під двері)\n"
+            "📞 098 521 02 04 | 🌐 https://proclean-drohobych.netlify.app\n"
+            "#дрогобич #трускавець #борислав #чисткаматраців #прокаттехніки"
+        ),
     },
     {
-        "mode": "BC",
-        "main_photo": "olx_4_zhyve_foto_tekhniky.jpg",
-        "mini_badge_img": "card_dripod.jpg",
-        "macro_bg_prompt": "Macro close-up of window glass with autumn raindrops and blurred outdoor trees, natural daylight, no rooms, no text",
-        "badge": "ПОГОДНИЙ КОНТРОЛЬ ДРОГОБИЧ",
-        "headline": "Як висушити диван чи матрац за 2–3 години у прохолодну погоду?",
-        "subline": "Американська турбосушка Dri-Eaz Dri-Pod видуває вологу на 360° без сирісті!",
-        "price_tag": "КОМБО №1 «Пилосос + Турбосушка + Хімія» = 850 грн/доба",
-        "topic_prompt": "Тема: Проблема сушіння меблів і килимів у поточну погоду в Дрогобичі. Прив'яжи текст до сьогоднішньої погоди за вікном і температури! Поясни, чому в прохолодну чи вологу погоду випраний диван без обдуву сохне 15–24 години і може затхнутися, а наша американська підлогова турбосушка Dri-Eaz Dri-Pod у КОМБО №1 з пилососом за 850 грн робить диван повністю сухим за 2–3 години.",
+        "id": "extractors_flagship",
+        "prefix": "3_",
+        "image": "3_puzzi_sabrina.jpg",
+        "headline": "Хімчистка дивана власноруч за 600 грн",
+        "subline": "Kärcher Puzzi 8/1 та Santoemma Sabrina у Дрогобичі",
+        "prompt_focus": (
+            "Напиши переконливий пост про вигоду подобової оренди професійних миючих пилососів у Дрогобичі: "
+            "німецький Kärcher Puzzi 8/1 (600 грн/доба) та італійський Santoemma Sabrina SW15 (650 грн/доба зі штангою "
+            "для прання килимів стоячи). Наголоси, що стартова порція порошку Kärcher RM 760 (80 г на 8 л) входить "
+            "безкоштовно, а за одну добу можна оновити всі дивани, матраци й килими вдома."
+        ),
+        "fallback_text": (
+            "За одну добу оренди можна спокійно перемити всі дивани, матраци, крісла й килими вдома — за ціною виклику майстра лише на одне крісло ✨\n\n"
+            "У нашому сервісі в Дрогобичі доступні обидва світові лідери екстракторної чистки:\n"
+            "• Kärcher Puzzi 8/1 (Німеччина) — 600 грн/доба: компактний, легкий і дуже зручний для диванів та салону авто.\n"
+            "• Santoemma Sabrina SW15 (Італія) — 650 грн/доба: підвищена сила вакууму та висока штанга для глибокого прання килимів стоячи.\n\n"
+            "Стартова порція гіпоалергенного порошку Kärcher RM 760 (80 г на 8 л води) та детальна інструкція вже у комплекті!\n\n"
+            "📍 Дрогобич • Трускавець • Борислав • Стебник • Східниця\n"
+            "📞 098 521 02 04 | 🌐 https://proclean-drohobych.netlify.app\n"
+            "#дрогобич #трускавець #борислав #karcherpuzzi #santoemmasabrina #хімчисткамеблів"
+        ),
     },
     {
-        "mode": "BC",
-        "main_photo": "olx_3_do_pislya_khimchystka.jpg",
-        "mini_badge_img": "card_sc2.jpg",
-        "macro_bg_prompt": "Extreme close-up macro of white ceramic kitchen tiles with clean grout lines and water droplets, natural daylight, no rooms, no text",
-        "badge": "ЛАЙФХАК ПРОТИ ПЛЯМ #3",
-        "headline": "Жирні плями від їжі, шоколад, віск і пластилін на оббивці дивана",
-        "subline": "Як термоудар парою 130°C + точковий плямовивідник RM 769 рятують тканину",
-        "price_tag": "Пароочисник SC 2: 400 грн | КОМБО з пилососом: 850 грн/доба",
-        "topic_prompt": "Рубрика «Лайфхаки з виведення плям із тканини»: жирні плями від їжі (піца, соус, олія, шоколад), а також віск від свічок чи пластилін на килимі та дивані. Дай практичну пораду господиням (як прибрати віск через паперову серветку праскою або льодом, чому жир не бере звичайна холодна вода) і розкажи, як комбінація пароочисника Kärcher SC 2 EasyFix та миючого пилососа (КОМБО №2 за 850 грн) або наш професійний плямовивідник Kärcher RM 769 розчиняють жир без сліду.",
+        "id": "steam_sc2",
+        "prefix": "4_",
+        "image": "4_steam_sc2.jpg",
+        "headline": "Кухня, плитка і шви без краплі хімії",
+        "subline": "Оренда пароочисника Kärcher SC 2 — 400 грн/доба",
+        "prompt_focus": (
+            "Напиши практичний пост про оренду пароочисника Kärcher SC 2 EasyFix у Дрогобичі (400 грн/доба окремо або "
+            "у КОМБО з пилососом чи роботом вікон). Розкажи, як гаряча пара без хімії вимиває міжплиткові шви, пори "
+            "ламінату, жир на кухонному фартусі, витяжці, духовці, кранах і душовій кабіні."
+        ),
+        "fallback_text": (
+            "Темні міжплиткові шви у ванній, жир на витяжці чи в'ївшийся бруд у текстурі ламінату, який не бере швабра? 💨\n\n"
+            "Замість агресивної побутової хімії візьміть на добу німецький пароочисник Kärcher SC 2 EasyFix із повним набором насадок. Струмінь чистої гарячої пари під тиском розчиняє застарілий жир, наліт навколо змішувачів, бруд у віконних рамах і знищує 99,9% бактерій — ідеально для сімей із дітьми та алергіків.\n\n"
+            "Вартість оренди у Дрогобичі — всього 400 грн/доба (замість купівлі за 9 100 грн!), а в парі з миючим пилососом або роботом для вікон діє вигідна знижка КОМБО.\n\n"
+            "📞 098 521 02 04 | 🌐 https://proclean-drohobych.netlify.app\n"
+            "#дрогобич #трускавець #борислав #пароочисник #генеральнеприбирання"
+        ),
     },
     {
-        "mode": "BC",
-        "main_photo": "hero_fleet_studio.jpg",
-        "mini_badge_img": "card_hobot.jpg",
-        "macro_bg_prompt": "Close-up macro of crystal clear glass window pane with soft bokeh city lights and trees outside, natural daylight, no text",
-        "badge": "ЧИСТІ ВІКНА ДО СВЯТ",
-        "headline": "Ідеально чисті вікна та панорамні балкони без ризику і розводів!",
-        "subline": "Робот-мийник вікон Hobot + спиртовий концентрат Kärcher RM 503 у комплекті",
-        "price_tag": "Оренда робота Hobot: 450 грн/доба | КОМБО з пароочисником: 750 грн",
-        "topic_prompt": "Тема: Чисті вікна та панорамні балкони у Дрогобичі, Трускавці та Бориславі з оглядом сьогоднішньої погоди за вікном та підготовки до найближчих українських свят. Чому мити вікна руками на висоті в холодну чи вітряну погоду небезпечно і важко, і як робот Hobot за 450 грн/доба зі спеціальним спиртовим концентратом Kärcher RM 503 натирає скло до блиску без розводів, поки ви п'єте гарячий чай.",
+        "id": "window_hobot",
+        "prefix": "5_",
+        "image": "5_window_hobot.jpg",
+        "headline": "Чисті панорамні вікна без ризику",
+        "subline": "Робот для миття вікон Hobot — 450 грн/доба",
+        "prompt_focus": (
+            "Напиши корисний пост про оренду робота для миття вікон Hobot у Дрогобичі та Трускавці (450 грн/доба, "
+            "засіб для скла й чисті серветки з мікрофібри в комплекті). Акцентуй на безпеці на високих поверхах, "
+            "глухих стулках балконів, панорамних вікнах і великих дзеркалах шаф-купе."
+        ),
+        "fallback_text": (
+            "Мити глухі стулки балкона чи панорамні вікна на високому поверсі вручну — завжди ризик і години на холодному вітрі 🪟✨\n\n"
+            "Робот-мийник Hobot зробить це за вас безпечно й без розводів: потужний вакуум міцно тримає його на склі, страхувальний трос гарантує спокій, а змінні серветки з мікрофібри натирають вікна, лоджії та дзеркала шаф-купе до кришталевого блиску.\n\n"
+            "Оренда у Дрогобичі — 450 грн/доба (професійний засіб для скла вже у комплекті!).\n\n"
+            "📍 Дрогобич • Трускавець • Борислав • Стебник\n"
+            "📞 098 521 02 04 | 🌐 https://proclean-drohobych.netlify.app\n"
+            "#дрогобич #трускавець #чистівікна #роботдлявікон #орендадрогобич"
+        ),
     },
     {
-        "mode": "BC",
-        "main_photo": "before_after_clean.jpg",
-        "mini_badge_img": "card_sabrina.jpg",
-        "macro_bg_prompt": "Extreme macro close-up of clean plush carpet fibers in natural daylight, soft texture, zero furniture, no text",
-        "badge": "ЛАЙФХАК ПРОТИ ПЛЯМ #4",
-        "headline": "Фломастери, ручка, слайм чи кров на дивані: головне правило хімії",
-        "subline": "Чому кров і білок миють ТІЛЬКИ крижаною водою та як витягнути чорнило з тканини?",
-        "price_tag": "Оренда екстрактора: від 600 грн | Виїзд майстра у Дрогобичі та районі",
-        "topic_prompt": "Рубрика «Лайфхаки з виведення плям із тканини»: кулькова ручка, дитячі фломастери, слайм та краплі крові на дивані чи матраці. Поясни золоте правило хімії: чому кров і будь-який білок у жодному разі не можна мити гарячою водою (білок миттєво згортається і навічно в'їдається у волокна — тільки крижана вода + ензими!), як спиртовий розчин піднімає чорнило, але чому без вакуумного промивання екстрактором пляма лише розпливається ширше.",
+        "id": "dryer_dripod",
+        "prefix": "6_",
+        "image": "6_dryer_dripod.jpg",
+        "headline": "Помили диван вранці — сухий за 2 години",
+        "subline": "Турбосушка Dri-Eaz Dri-Pod — 350 грн/доба",
+        "prompt_focus": (
+            "Напиши переконливий пост про вирішення головної проблеми осінньо-зимової хімчистки — довгого висихання меблів. "
+            "Поясни, як американська купольна турбосушка Dri-Eaz Dri-Pod скорочує час сушіння дивана чи матраца з 12–15 годин "
+            "до 2–3 годин без затхлості (окремо 350 грн/доба, а у КОМБО №1 з пилососом — лише +250 грн!)."
+        ),
+        "fallback_text": (
+            "Боїтеся чистити диван або дитячий матрац у прохолодну пору, бо він сохнутиме до наступного дня? 🌬🛋\n\n"
+            "Американська купольна турбосушка Dri-Eaz Dri-Pod вирішує це питання за 2–3 години: спрямований потік повітря на 360° швидко видуває вологу з наповнювача, тож уже ввечері родина спокійно відпочиває на сухих і свіжих меблях.\n\n"
+            "Окремо оренда сушки коштує 350 грн/доба, а в нашому хітовому КОМБО №1 разом із миючим пилососом та порцією хімії — лише +250 грн (850–900 грн за весь комплект!).\n\n"
+            "📞 Бронювання у Дрогобичі: 098 521 02 04\n"
+            "🌐 https://proclean-drohobych.netlify.app\n"
+            "#дрогобич #трускавець #борислав #сушкамеблів #хімчисткадиванів"
+        ),
     },
     {
-        "mode": "BC",
-        "main_photo": "olx_5_ozonator_yato.jpg",
-        "mini_badge_img": "card_yato.jpg",
-        "macro_bg_prompt": "Close-up macro of fresh morning dew drops on green pine needles in crisp Carpathian air, natural bokeh, no text",
-        "badge": "СВІЖЕ ПОВІТРЯ В ОСЕЛІ ТА АВТО",
-        "headline": "Як за 1 годину назавжди прибрати запах диму, вогкості чи тварин?",
-        "subline": "Професійний озонатор повітря YATO YT-73350 (20 000 мг/год) стерилізує повітря!",
-        "price_tag": "Оренда озонатора YATO: 350 грн/доба | КОМБО з пилососом: 850 грн",
-        "topic_prompt": "Тема: Професійне озонування квартири, будинку або салону авто озонатором YATO YT-73350 та підготовка салону машини й оселі до сезону й свят. Поясни, як газ озон (O3) проникає у всі щілини, вентиляцію та тканину, руйнуючи молекули запаху сигарет, старого житла, горілої їжі чи котячих міток за 40–60 хвилин.",
-    },
-    {
-        "mode": "BC",
-        "main_photo": "hero_fleet_studio.jpg",
-        "mini_badge_img": "card_puzzi.jpg",
-        "macro_bg_prompt": "Extreme macro close-up of clean knitted wool blanket texture by a sunny window, cozy home atmosphere, no furniture, no text",
-        "badge": "PRO-CLEAN RENT • ВЕСЬ ПАРК ТЕХНІКИ",
-        "headline": "Як за 600 грн/доба перемити всі дивани, матраци і килими в домі?",
-        "subline": "Kärcher Puzzi • Sabrina SW15 • Hobot • SC 2 • Сушка Dri-Pod • Доставка під двері!",
-        "price_tag": "Оренда від 350–600 грн/доба • Комбо All-in-One: 1450 грн",
-        "topic_prompt": "Тема: Як за 1 добу влаштувати повне перезавантаження чистоти у своїй квартирі чи будинку в Дрогобичі, Трускавці, Бориславі, Стебнику чи Східниці перед святами або вихідними. Порівняй економію: один виклик клінінгу на великий кутовий диван, 2 матраци і килим коштує 3500–4500 грн, а оренда миючого пилососа з хімією в подарунок — лише 600 грн на цілу добу (або КОМБО All-in-One за 1450 грн).",
+        "id": "car_detailing_kwazar",
+        "prefix": "7_",
+        "image": "7_car_kwazar.jpg",
+        "headline": "Хімчистка салону авто власноруч",
+        "subline": "Миючий пилосос + піногенератор Kwazar + Pol Star",
+        "prompt_focus": (
+            "Напиши практичний пост для водіїв Дрогобича, Борислава і Трускавця: як самостійно зробити професійний "
+            "детейлінг сидінь, підлоги й багажника авто у власному гаражі чи на подвір'ї. Опиши набір «Делікат / Авто + "
+            "Піна Kwazar» (220 грн: німецький концентрат Koch Chemie Pol Star pH 7 + піногасник + помповий піногенератор "
+            "Kwazar 2 л на добу) разом із Puzzi 8/1 (600 грн) та озонатором повітря YATO проти запаху тютюну й вогкості."
+        ),
+        "fallback_text": (
+            "Освіжити сидіння, карти дверей, підлогу й багажник власного авто на професійному обладнанні можна за одні вихідні — у 4 рази дешевше за автостудію 🚗✨\n\n"
+            "До миючого пилососа Kärcher Puzzi 8/1 (600 грн/доба) у нас є спеціальний авто-сет «Делікат / Авто + Піна Kwazar» (220 грн): нейтральний німецький засіб Koch Chemie Pol Star (pH 7 для тканини, велюру та алькантари), піногасник і ручний піногенератор Kwazar 2 л, який дає щільну піну без перезволоження поролону сидінь.\n\n"
+            "А якщо в салоні відчувається запах тютюну чи вологи з пічки — візьміть додатково промисловий озонатор YATO для повної стерилізації повітря за 30 хвилин.\n\n"
+            "📍 м. Дрогобич • Тел./Viber: 098 521 02 04\n"
+            "🌐 Калькулятор оренди: https://proclean-drohobych.netlify.app\n"
+            "#дрогобич #борислав #трускавець #хімчисткаавто #детейлінг"
+        ),
     },
 ]
 
-WMO_WEATHER_UA = {
-    0: ("Ясно і сонячно", "сонячна погода без опадів"),
-    1: ("Переважно ясно", "легка хмарність з проясненнями"),
-    2: ("Мінлива хмарність", "хмарна з проясненнями погода"),
-    3: ("Похмуро", "щільно затягнуте хмарами небо"),
-    45: ("Туман і вогкість", "густий осінньо-зимовий туман і висока вологість повітря"),
-    48: ("Паморозь і туман", "туман із памороззю та сирістю"),
-    51: ("Легка мряка", "дрібна мряка і вологе повітря"),
-    53: ("Мряка і сльота", "мряка, мокрий асфальт і сирість"),
-    55: ("Сильна мряка", "густа холодна мряка і болото під ногами"),
-    61: ("Невеликий дощ", "невеликий дощ і мокрі вулиці"),
-    63: ("Дощ і калюжі", "справжній дощ, калюжі та сльота на вулицях"),
-    65: ("Сильна злива", "рясна злива і мокрі дороги"),
-    66: ("Крижаний дощ", "крижаний дощ і ожеледиця"),
-    67: ("Сильний крижаний дощ", "сильний крижаний дощ і слизькі тротуари"),
-    71: ("Невеликий сніг", "перший легкий сніжок, що кружляє у повітрі"),
-    73: ("Йде сніг", "справжній сніг у Дрогобичі та білі дахи"),
-    75: ("Сильний снігопад", "густий снігопад і кучугури снігу"),
-    77: ("Снігова крупа", "колюча снігова крупа і морозне повітря"),
-    80: ("Зливовий дощ", "короткочасні дощі та калюжі"),
-    81: ("Сильний дощ", "рясний дощ та болото у дворах"),
-    85: ("Снігопад", "лапатий сніг і зимова атмосфера"),
-    86: ("Сильна хуртовина", "заметіль і багато снігу на вулицях"),
-}
+
+def get_env_any(*names: str, default: str = "") -> str:
+    for n in names:
+        val = os.environ.get(n, "").strip()
+        if val:
+            return val
+    return default
 
 
-def strip_non_bmp(text: str) -> str:
-    return re.sub(r"[^\u0000-\u27BF]", "", text).strip()
-
-
-def get_drohobych_weather() -> dict:
+def fetch_drohobych_weather() -> str:
     url = (
         "https://api.open-meteo.com/v1/forecast"
         "?latitude=49.35&longitude=23.50"
-        "&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m"
+        "&current=temperature_2m,weather_code"
         "&timezone=Europe%2FKyiv"
     )
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "ProCleanDrohobych/3.2"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))["current"]
-            temp = round(float(data.get("temperature_2m", 5.0)))
-            humidity = int(data.get("relative_humidity_2m", 80))
-            wcode = int(data.get("weather_code", 3))
-            wind = round(float(data.get("wind_speed_10m", 3.0)))
-            short_desc, detail_desc = WMO_WEATHER_UA.get(wcode, ("Прохолодно", "типова прикарпатська погода"))
-            sign = "+" if temp > 0 else ""
-            badge_str = f"Дрогобич зараз: {sign}{temp}°C ({short_desc})"
-            context_str = (
-                f"Зараз у Дрогобичі та Трускавці реальна температура {sign}{temp}°C, {detail_desc}, "
-                f"вологість повітря {humidity}%, вітер {wind} км/год."
-            )
-            return {
-                "temp": temp,
-                "humidity": humidity,
-                "wcode": wcode,
-                "short_desc": short_desc,
-                "badge_str": badge_str,
-                "context_str": context_str,
-            }
-    except Exception as exc:
-        print(f"Не вдалося отримати погоду ({exc}) — використовуємо сезонні дані.")
-        return {
-            "temp": 4,
-            "humidity": 82,
-            "wcode": 3,
-            "short_desc": "Прохолодно",
-            "badge_str": "Дрогобич: +4°C (Прохолодно)",
-            "context_str": "Зараз у Дрогобичі прохолодна пора, висока вологість на вулиці.",
-        }
-
-
-def get_ukrainian_calendar_context(now_kyiv: datetime.datetime) -> dict:
-    today = now_kyiv.date()
-    year = today.year
-
-    weekdays_ua = [
-        "понеділок", "вівторок", "середа", "четвер", "п'ятниця", "субота", "неділя"
-    ]
-    months_genitive = {
-        1: "січня", 2: "лютого", 3: "березня", 4: "квітня",
-        5: "травня", 6: "червня", 7: "липня", 8: "серпня",
-        9: "вересня", 10: "жовтня", 11: "листопада", 12: "грудня"
-    }
-    weekday_name = weekdays_ua[today.weekday()]
-    date_human = f"{today.day} {months_genitive[today.month]}"
-    is_morning = now_kyiv.hour < 14
-    time_of_day_hint = (
-        "Ранковий кавовий час — люди у Дрогобичі п'ють ранкову каву, збираються у справах і планують свій день."
-        if is_morning else
-        "Вечірній прайм-тайм — люди повернулися з роботи додому, відпочивають на дивані й планують справи на завтра."
-    )
-
-    holidays = [
-        (datetime.date(year, 11, 21), "День Гідності та Свободи (Михайла за старим стилем, початок активної підготовки оселі до зими)"),
-        (datetime.date(year, 11, 30), "День Святого Андрія Первозванного (українські вечорниці та початок зимового циклу свят)"),
-        (datetime.date(year, 12, 6), "День Святого Миколая та День ЗСУ (час, коли Миколай кладе подарунки під ідеально чисті подушки!)"),
-        (datetime.date(year, 12, 24), "Святвечір перед Різдвом Христовим (традиція зустрічати Різдво у бездоганно чистій хаті, де вимиті всі кутки, вікна, килими й меблі)"),
-        (datetime.date(year, 12, 25), "Різдво Христове (коляда, прийом гостей та родини за святковим столом)"),
-        (datetime.date(year, 1, 1), "Новий рік"),
-        (datetime.date(year + 1, 1, 1), "Новий рік"),
-        (datetime.date(year, 1, 6), "Водохреща (Богоявлення — час освіжити меблі після святкових застіль!)"),
-        (datetime.date(year + 1, 1, 6), "Водохреща (Богоявлення)"),
-        (datetime.date(year, 2, 14), "День Святого Валентина"),
-        (datetime.date(year + 1, 2, 14), "День Святого Валентина"),
-        (datetime.date(year, 3, 8), "Весняне оновлення дому"),
-        (datetime.date(year, 5, 1), "Великоднє генеральне прибирання"),
-        (datetime.date(year, 8, 24), "День Незалежності України"),
-        (datetime.date(year, 10, 1), "Покрова Пресвятої Богородиці та День захисників України"),
-    ]
-
-    upcoming_notes = []
-    short_countdown_badge = f"{date_human} ({weekday_name})"
-
-    for h_date, h_title in holidays:
-        delta = (h_date - today).days
-        if delta == 0:
-            upcoming_notes.append(f"СЬОГОДНІ В УКРАЇНІ СВЯТО: {h_title}! Обов'язково щиро привітай дрогобичан і трускавчан у першому абзаці!")
-            short_countdown_badge = f"Сьогодні: {h_title.split('(')[0].strip()}!"
-        elif 1 <= delta <= 45:
-            upcoming_notes.append(f"До події «{h_title}» залишилося рівно {delta} дн.")
-
-    st_nicholas = datetime.date(year, 12, 6)
-    christmas = datetime.date(year, 12, 25)
-    new_year = datetime.date(year + 1, 1, 1)
-
-    if 1 <= (st_nicholas - today).days <= 32:
-        d_nik = (st_nicholas - today).days
-        short_countdown_badge = f"До Миколая: {d_nik} дн. ({date_human})"
-    elif 1 <= (christmas - today).days <= 25:
-        d_chr = (christmas - today).days
-        short_countdown_badge = f"До Різдва: {d_chr} дн. ({date_human})"
-    elif 1 <= (new_year - today).days <= 30:
-        d_ny = (new_year - today).days
-        short_countdown_badge = f"До Нового року: {d_ny} дн.!"
-
-    weekday_advice = ""
-    if today.weekday() in (3, 4):
-        weekday_advice = "Сьогодні кінець робочого тижня — нагадай, що на суботу та неділю техніку розбирають найшвидше, тому краще забронювати на вихідні вже зараз."
-    elif today.weekday() in (5, 6):
-        weekday_advice = "Сьогодні вихідний день — ідеальний час приділити 2 години дому або замовити виїзд майстра на наступний тиждень."
-
-    calendar_summary = (
-        f"Сьогодні {date_human} {year} року, день тижня: {weekday_name}. {time_of_day_hint} "
-        f"Календар свят та відлік днів: {'; '.join(upcoming_notes[:3]) if upcoming_notes else 'сезон домашнього затишку'}. "
-        f"{weekday_advice}"
-    )
-    return {
-        "date_human": date_human,
-        "weekday_name": weekday_name,
-        "short_countdown_badge": short_countdown_badge,
-        "calendar_summary": calendar_summary,
-    }
-
-
-def discover_gemini_models(gemini_api_key: str) -> list[str]:
-    """Автоматично запитує у Google список актуальних моделей Gemini, щоб ніколи не було 404 Not Found."""
-    fallback_candidates = [
-        "gemini-3.7-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        "gemini-3-flash-preview",
-        "gemini-2.5-flash",
-    ]
-    list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_api_key}"
-    try:
-        req = urllib.request.Request(list_url, headers={"User-Agent": "ProCleanAutoPoster/3.2"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        req = urllib.request.Request(url, headers={"User-Agent": "ProCleanAutoPoster/4.0"})
+        with urllib.request.urlopen(req, timeout=12) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            found_flash = []
-            found_other = []
-            skip_words = ("tts", "image", "embedding", "aqa", "audio", "vision", "veo", "imagen", "robotics")
-            for m in data.get("models", []):
-                methods = m.get("supportedGenerationMethods", [])
-                name = m.get("name", "")
-                if "generateContent" not in methods or not name.startswith("models/gemini"):
-                    continue
-                short_name = name.replace("models/", "")
-                if any(sw in short_name.lower() for sw in skip_words):
-                    continue
-                if "flash" in short_name.lower():
-                    found_flash.append(short_name)
-                else:
-                    found_other.append(short_name)
-            # Сортуємо за спаданням версії (найновіші моделі першими)
-            found_flash.sort(reverse=True)
-            found_other.sort(reverse=True)
-            combined = found_flash + found_other
-            if combined:
-                print(f"Знайдено активні моделі Gemini для ключа: {combined[:5]}")
-                return combined[:5]
-    except Exception as exc:
-        print(f"Не вдалося отримати динамічний список моделей ({exc}), використовуємо резервний список.")
-    return fallback_candidates
+        cur = data.get("current", {})
+        temp = round(cur.get("temperature_2m", 5))
+        wcode = cur.get("weather_code", 0)
+        if wcode == 0:
+            desc = "сонячно"
+        elif wcode in (1, 2, 3):
+            desc = "хмарно з проясненнями"
+        elif wcode in (45, 48):
+            desc = "туманно"
+        elif wcode in (51, 53, 55, 61, 63, 65, 80, 81, 82):
+            desc = "дощить і сиро"
+        elif wcode in (71, 73, 75, 77, 85, 86):
+            desc = "сніжно й морозно"
+        else:
+            desc = "прохолодно"
+        return f"{temp:+d}°C ({desc})"
+    except Exception:
+        return "свіжа погода"
 
 
-def generate_live_caption_with_gemini(
-    rubric: dict, weather: dict, cal: dict, gemini_api_key: str
-) -> str:
-    if not gemini_api_key:
-        return build_dynamic_fallback_caption(rubric, weather, cal)
-
-    prompt = f"""{BUSINESS_CONTEXT}
-
-РЕАЛЬНИЙ КОНТЕКСТ СЬОГОДНІШНЬОГО ДНЯ У ДРОГОБИЧІ (ОБОВ'ЯЗКОВО ВПЛЕТИ ЦЕ В ТЕКСТ!):
-1. ДАТА І СВЯТА: {cal['calendar_summary']}
-2. ПОГОДА ПРОСТО ЗАРАЗ У ДРОГОБИЧІ: {weather['context_str']}
-3. СЬОГОДНІШНЯ ТЕМА / РУБРИКА: {rubric['topic_prompt']}
-
-Твоє завдання — написати живий, теплий, розумний, абсолютно нешаблонний допис для наших сусідів у Facebook та Instagram (Дрогобич, Трускавець, Борислав, Стебник, Східниця).
-
-СУВОРІ ВИМОГИ ДО ТЕКСТУ:
-- У перших 1–2 реченнях природно й живо згадай сьогоднішню погоду у Дрогобичі (температуру {weather['temp']}°C, стан неба: {weather['short_desc']}) ТА/АБО скільки днів залишилося до найближчого свята ({cal['short_countdown_badge']}) чи який сьогодні день тижня ({cal['weekday_name']}). Пиши так, ніби ти сам щойно виглянув у вікно в Дрогобичі!
-- Далі детально й цікаво розкрий тему сьогоднішньої рубрики (особливо якщо це лайфхак із виведення плям — дай реальну практичну користь, щоб люди зберегли собі пост у закладки!).
-- Природно підведи до рішення від PRO-CLEAN RENT з точними цінами (наприклад, оренда Kärcher Puzzi 8/1 — 600 грн/доба з хімією у комплекті, Sabrina SW15 — 650 грн, КОМБО з турбосушкою чи пароочисником — 850–900 грн, або виїзд нашого майстра).
-- Обов'язково вкажи клікабельне посилання на наш сайт із калькулятором: https://proclean-drohobych.netlify.app
-- Обов'язково вкажи телефон / Viber / Telegram: 098-521-02-04.
-- У кінці додай 6–8 локальних хештегів (#дрогобич #трускавець #борислав #стебник #східниця #хімчисткадрогобич #орендадрогобич #procleanrent).
-- НЕ використовуй зірочки (** або *), НЕ пиши слово "Заголовок:", поверни тільки чистий готовий текст допису з гарними абзацами та емодзі.
-"""
-
-    models = discover_gemini_models(gemini_api_key)
-    for model_name in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_api_key}"
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.85,
-                "maxOutputTokens": 1400,
-            },
-        }
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=40) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                parts = data["candidates"][0]["content"]["parts"]
-                text = "".join(p.get("text", "") for p in parts).strip()
-                text = text.replace("**", "")
-                if len(text) > 150:
-                    print(f"Унікальний живий текст успішно згенеровано через {model_name}!")
-                    return text
-        except urllib.error.HTTPError as exc:
-            err_body = exc.read().decode("utf-8", errors="replace")[:300]
-            print(f"Модель {model_name} повернула HTTP {exc.code}: {err_body}")
-        except Exception as exc:
-            print(f"Модель {model_name} повернула помилку ({exc}), пробуємо наступну...")
-
-    return build_dynamic_fallback_caption(rubric, weather, cal)
+def choose_topic(now_kyiv: datetime, cli_topic: str | None = None) -> tuple[int, dict]:
+    forced = (cli_topic or os.environ.get("FORCE_TOPIC_INDEX", "")).strip()
+    if forced.lstrip("-").isdigit():
+        val = int(forced)
+        # Якщо передано 1..7 або 0..6 — коректно приводимо до індексу
+        idx = (val - 1) % len(TOPICS) if val >= 1 else val % len(TOPICS)
+        return idx, TOPICS[idx]
+    day_ordinal = now_kyiv.toordinal()
+    slot = 0 if now_kyiv.hour < 14 else 1
+    idx = (day_ordinal * 2 + slot) % len(TOPICS)
+    return idx, TOPICS[idx]
 
 
-def build_dynamic_fallback_caption(rubric: dict, weather: dict, cal: dict) -> str:
-    sign = "+" if weather["temp"] > 0 else ""
-    return (
-        f"📍 {weather['badge_str']} | 🗓 {cal['short_countdown_badge']}\n\n"
-        f"Друзі, сьогодні у нас в Дрогобичі {sign}{weather['temp']}°C ({weather['short_desc']}), "
-        f"а на календарі вже {cal['date_human']} ({cal['weekday_name']})! Саме час подбати про чистоту й затишок в оселі перед святами.\n\n"
-        f"💡 {rubric['badge']}: {rubric['headline']}\n"
-        f"{rubric['subline']}\n\n"
-        f"Чому жителі Дрогобича, Трускавця, Борислава та Стебника обирають PRO-CLEAN RENT?\n"
-        f"✅ {rubric['price_tag']}\n"
-        f"✅ Миючий пилосос Kärcher Puzzi 8/1 — 600 грн/доба (порція хімії RM 760 вже у комплекті!)\n"
-        f"✅ Італійський екстрактор Santoemma Sabrina SW15 — 650 грн/доба\n"
-        f"✅ КОМБО «Пилосос + Американська турбосушка Dri-Pod» (сухий диван за 2–3 год у будь-яку сирість!) — 850 грн/доба\n"
-        f"✅ Пароочисник Kärcher SC 2 — 400 грн | Робот для вікон Hobot — 450 грн | Озонатор YATO — 350 грн\n"
-        f"✅ Виїзна 5-ступенева хімчистка майстром преміум-хімією Chemspec (США) з безпечним ополіскувачем All Fiber Rinse!\n\n"
-        f"🧮 Порахуйте вартість оренди або доставки за 30 секунд у нашому онлайн-калькуляторі:\n"
-        f"👉 https://proclean-drohobych.netlify.app\n\n"
-        f"📞 Бронювання та консультація (Тел / Viber / Telegram): 098-521-02-04\n\n"
-        f"#дрогобич #трускавець #борислав #стебник #східниця #хімчисткадрогобич #орендадрогобич #procleanrent"
-    )
+def ensure_cyrillic_fonts() -> tuple[str, str]:
+    """Забезпечує сучасний кириличний шрифт Montserrat / Inter (або надійний системний резерв)."""
+    cache_dir = Path("/tmp/proclean_fonts")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    bold_dl = cache_dir / "Montserrat-Bold.ttf"
+    med_dl = cache_dir / "Montserrat-Medium.ttf"
 
-
-def load_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
-    candidates = [
-        "/usr/share/fonts/opentype/inter/Inter-ExtraBold.otf" if bold else "/usr/share/fonts/opentype/inter/Inter-Bold.otf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    urls = [
+        (bold_dl, "https://raw.githubusercontent.com/JulietaUla/Montserrat/master/fonts/ttf/Montserrat-Bold.ttf"),
+        (med_dl, "https://raw.githubusercontent.com/JulietaUla/Montserrat/master/fonts/ttf/Montserrat-Medium.ttf"),
     ]
-    for path in candidates:
-        if os.path.exists(path):
-            return ImageFont.truetype(path, size)
-    return ImageFont.load_default()
+    for dst, url in urls:
+        if not dst.exists() or dst.stat().st_size < 20000:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "ProCleanAutoPoster/4.0"})
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    data = r.read()
+                if len(data) > 20000:
+                    dst.write_bytes(data)
+            except Exception:
+                pass
+
+    if bold_dl.exists() and med_dl.exists():
+        return str(bold_dl), str(med_dl)
+
+    bold_candidates = [
+        str(BASE_DIR / "fonts" / "Inter-Bold.ttf"),
+        "/usr/share/fonts/opentype/inter/Inter-Bold.otf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]
+    reg_candidates = [
+        str(BASE_DIR / "fonts" / "Inter-Medium.ttf"),
+        "/usr/share/fonts/opentype/inter/Inter-Medium.otf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    b_font = next((p for p in bold_candidates if os.path.exists(p)), "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
+    r_font = next((p for p in reg_candidates if os.path.exists(p)), b_font)
+    return b_font, r_font
 
 
-def fetch_macro_texture_bg(macro_prompt: str) -> Image.Image | None:
-    seed = random.randint(1000, 999999)
-    encoded = urllib.parse.quote(macro_prompt)
-    url = f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1080&seed={seed}&model=flux-realism&nologo=true"
-    req = urllib.request.Request(url, headers={"User-Agent": "ProCleanAutoPoster/3.2"})
+def wrap_and_fit_text(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font_path: str,
+    start_size: int,
+    min_size: int,
+    max_width: int,
+    max_lines: int = 2,
+) -> tuple[ImageFont.FreeTypeFont, list[str]]:
+    """Гарантує, що жодна літера ніколи не вийде за межі безпечної зони max_width."""
+    words = text.strip().split()
+    for sz in range(start_size, min_size - 1, -2):
+        font = ImageFont.truetype(font_path, sz)
+        lines: list[str] = []
+        cur = ""
+        for w in words:
+            cand = f"{cur} {w}".strip()
+            bbox = draw.textbbox((0, 0), cand, font=font)
+            if (bbox[2] - bbox[0]) <= max_width:
+                cur = cand
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = w
+        if cur:
+            lines.append(cur)
+
+        fits_width = all((draw.textbbox((0, 0), ln, font=font)[2] - draw.textbbox((0, 0), ln, font=font)[0]) <= max_width for ln in lines)
+        if fits_width and len(lines) <= max_lines:
+            return font, lines
+
+    font = ImageFont.truetype(font_path, min_size)
+    return font, [text]
+
+
+def resolve_topic_image(topic: dict) -> Path:
+    exact = IMAGES_DIR / topic["image"]
+    if exact.exists():
+        return exact
+
+    prefix = topic["prefix"]
+    valid_exts = {".jpg", ".jpeg", ".png", ".webp"}
+    all_imgs = [
+        p for p in sorted(IMAGES_DIR.iterdir())
+        if p.is_file() and p.suffix.lower() in valid_exts and p.name.lower() != OUTPUT_CARD.name.lower()
+    ]
+    for p in all_imgs:
+        if p.name.startswith(prefix):
+            return p
+
+    if not all_imgs:
+        raise FileNotFoundError(f"У папці {IMAGES_DIR} немає вхідних зображень!")
+    all_imgs.sort(key=lambda p: p.stat().st_size, reverse=True)
+    return all_imgs[0]
+
+
+def render_editorial_card(topic: dict) -> Path:
+    """Формує повноекранну журнальну картку 1080x1350 (4:5) без рамок і з кришталевою різкістю."""
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    src_path = resolve_topic_image(topic)
+    print(f"Фото-основа: {src_path.name}")
+
+    im = Image.open(src_path).convert("RGB")
+    scale = max(CANVAS_W / im.width, CANVAS_H / im.height)
+    nw, nh = int(round(im.width * scale)), int(round(im.height * scale))
+    im_resized = im.resize((nw, nh), Image.Resampling.LANCZOS)
+    x0 = (nw - CANVAS_W) // 2
+    y0 = (nh - CANVAS_H) // 2
+    base = im_resized.crop((x0, y0, x0 + CANVAS_W, y0 + CANVAS_H))
+
+    base = ImageEnhance.Contrast(base).enhance(1.03)
+    base = ImageEnhance.Sharpness(base).enhance(1.08)
+    rgba = base.convert("RGBA")
+
+    # М'який напівпрозорий градієнт лише у верхній та нижній кромках під текст
+    grad = Image.new("RGBA", (CANVAS_W, CANVAS_H), (0, 0, 0, 0))
+    g_draw = ImageDraw.Draw(grad)
+
+    top_h = 345
+    for y in range(top_h):
+        ratio = 1.0 - (y / top_h)
+        alpha = int(170 * (ratio ** 1.45))
+        g_draw.line([(0, y), (CANVAS_W, y)], fill=(10, 16, 28, alpha))
+
+    bot_start = 1175
+    bot_h = CANVAS_H - bot_start
+    for i in range(bot_h):
+        y = bot_start + i
+        ratio = i / max(1, bot_h - 1)
+        alpha = int(180 * (ratio ** 1.35))
+        g_draw.line([(0, y), (CANVAS_W, y)], fill=(10, 16, 28, alpha))
+
+    composed = Image.alpha_composite(rgba, grad)
+    draw = ImageDraw.Draw(composed)
+    bold_font_path, reg_font_path = ensure_cyrillic_fonts()
+
+    # 1. Верхній бренд-підпис
+    f_over, over_lines = wrap_and_fit_text(
+        draw, "PRO-CLEAN RENT  •  ОРЕНДА У ДРОГОБИЧІ", bold_font_path, start_size=24, min_size=18, max_width=MAX_TEXT_W, max_lines=1
+    )
+    over_txt = over_lines[0]
+    ob = draw.textbbox((0, 0), over_txt, font=f_over)
+    ox = (CANVAS_W - (ob[2] - ob[0])) // 2
+    draw.text((ox + 1, 51), over_txt, font=f_over, fill=(0, 0, 0, 150))
+    draw.text((ox, 50), over_txt, font=f_over, fill=(250, 214, 105, 255))
+
+    # 2. Журнальний заголовок (1–2 рядки, авто-контроль ширини)
+    f_head, head_lines = wrap_and_fit_text(
+        draw, topic["headline"], bold_font_path, start_size=50, min_size=30, max_width=MAX_TEXT_W, max_lines=2
+    )
+    cur_y = 94
+    for ln in head_lines:
+        lb = draw.textbbox((0, 0), ln, font=f_head)
+        lw = lb[2] - lb[0]
+        lh = lb[3] - lb[1]
+        lx = (CANVAS_W - lw) // 2
+        draw.text((lx + 2, cur_y + 3), ln, font=f_head, fill=(0, 0, 0, 170))
+        draw.text((lx, cur_y), ln, font=f_head, fill=(255, 255, 255, 255))
+        cur_y += lh + 14
+
+    # 3. Короткий підзаголовок
+    f_sub, sub_lines = wrap_and_fit_text(
+        draw, topic["subline"], reg_font_path, start_size=27, min_size=19, max_width=MAX_TEXT_W, max_lines=2
+    )
+    cur_y += 4
+    for sln in sub_lines:
+        sb = draw.textbbox((0, 0), sln, font=f_sub)
+        sw = sb[2] - sb[0]
+        sh = sb[3] - sb[1]
+        sx = (CANVAS_W - sw) // 2
+        draw.text((sx + 1, cur_y + 2), sln, font=f_sub, fill=(0, 0, 0, 155))
+        draw.text((sx, cur_y), sln, font=f_sub, fill=(226, 232, 240, 255))
+        cur_y += sh + 8
+
+    # 4. Охайний контакт унизу без рамок
+    footer_str = "098 521 02 04  •  proclean-drohobych.netlify.app"
+    f_foot, foot_lines = wrap_and_fit_text(
+        draw, footer_str, bold_font_path, start_size=27, min_size=19, max_width=MAX_TEXT_W, max_lines=1
+    )
+    ftxt = foot_lines[0]
+    fb = draw.textbbox((0, 0), ftxt, font=f_foot)
+    fx = (CANVAS_W - (fb[2] - fb[0])) // 2
+    fy = CANVAS_H - 66
+    draw.text((fx + 2, fy + 2), ftxt, font=f_foot, fill=(0, 0, 0, 180))
+    draw.text((fx, fy), ftxt, font=f_foot, fill=(255, 255, 255, 255))
+
+    final_rgb = composed.convert("RGB")
+    final_rgb.save(str(OUTPUT_CARD), format="JPEG", quality=95, subsampling=0, optimize=True)
+    print(f"Збережено HD-картку 1080x1350: {OUTPUT_CARD} ({OUTPUT_CARD.stat().st_size // 1024} KB)")
+    return OUTPUT_CARD
+
+
+def generate_caption_with_gemini(api_key: str, topic: dict, weather_str: str, now_kyiv: datetime) -> str:
+    if not api_key:
+        return topic["fallback_text"]
+
+    models_to_try = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.0-flash"]
     try:
-        with urllib.request.urlopen(req, timeout=35) as resp:
-            raw = resp.read()
-            if len(raw) > 15000:
-                im = Image.open(io.BytesIO(raw)).convert("RGB")
-                return im.resize((1080, 1080), Image.Resampling.LANCZOS)
-    except Exception as exc:
-        print(f"Макро-фон недоступний ({exc}) — використовуємо фірмовий темно-синій фон.")
-    return None
+        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        with urllib.request.urlopen(list_url, timeout=15) as resp:
+            mdata = json.loads(resp.read().decode("utf-8"))
+        discovered = [
+            m["name"].replace("models/", "")
+            for m in mdata.get("models", [])
+            if "generateContent" in m.get("supportedGenerationMethods", [])
+            and "flash" in m.get("name", "").lower()
+            and "tts" not in m.get("name", "").lower()
+            and "image" not in m.get("name", "").lower()
+        ]
+        ordered = [m for m in models_to_try if m in discovered] + [m for m in discovered if m not in models_to_try]
+        if ordered:
+            models_to_try = ordered
+    except Exception as e:
+        print(f"Використовуємо базовий перелік моделей ({e})")
 
-
-def build_hybrid_card_image(rubric: dict, weather: dict, cal: dict, out_path: str) -> None:
-    W, H = 1080, 1080
-    canvas = Image.new("RGB", (W, H), (15, 23, 42))
-
-    if rubric.get("macro_bg_prompt"):
-        bg_im = fetch_macro_texture_bg(rubric["macro_bg_prompt"])
-        if bg_im is not None:
-            bg_blurred = bg_im.filter(ImageFilter.GaussianBlur(radius=4))
-            dark_overlay = Image.new("RGB", (W, H), (12, 19, 36))
-            canvas = Image.blend(bg_blurred, dark_overlay, alpha=0.72)
-
-    draw = ImageDraw.Draw(canvas)
-
-    f_weather = load_font(22, bold=True)
-    f_badge = load_font(24, bold=True)
-    f_head = load_font(38, bold=True)
-    f_sub = load_font(24, bold=False)
-    f_price = load_font(31, bold=True)
-    f_footer = load_font(23, bold=True)
-
-    draw.rounded_rectangle([32, 24, 1048, 88], radius=16, fill=(30, 41, 59), outline=(56, 189, 248), width=2)
-    top_bar_text = strip_non_bmp(f"{weather['badge_str']}   |   {cal['short_countdown_badge']}")
-    draw.text((52, 43), top_bar_text[:66], font=f_weather, fill=(125, 211, 252))
-
-    badge_clean = strip_non_bmp(rubric["badge"])
-    draw.rounded_rectangle([32, 104, 520, 152], radius=12, fill=(250, 204, 21))
-    draw.text((50, 114), badge_clean, font=f_badge, fill=(15, 23, 42))
-
-    wrapped_head = textwrap.wrap(strip_non_bmp(rubric["headline"]), width=42)[:2]
-    y_cursor = 166
-    for line in wrapped_head:
-        draw.text((36, y_cursor), line, font=f_head, fill=(255, 255, 255))
-        y_cursor += 46
-
-    card_top = 274
-    card_bottom = 788
-    draw.rounded_rectangle(
-        [32, card_top, 1048, card_bottom],
-        radius=28,
-        fill=(255, 255, 255),
-        outline=(250, 204, 21),
-        width=4,
+    part_of_day = "ранок" if now_kyiv.hour < 14 else "вечір"
+    prompt = (
+        "Ти — власник сервісу оренди професійної техніки для прибирання та хімчистки PRO-CLEAN RENT у м. Дрогобич "
+        "(працюємо: Дрогобич, Трускавець, Борислав, Стебник, Східниця). "
+        "Пиши українською мовою природно, живо, доброзичливо й експертно.\n\n"
+        "СУВОРІ ПРАВИЛА:\n"
+        "1. НЕ починай пост із шаблонних зведень погоди чи дати ('Дрогобич зараз: +3°C...'). Починай одразу з живого життєвого питання або болю клієнта.\n"
+        f"2. Частина доби зараз — {part_of_day}, погода в Дрогобичі — {weather_str} (згадай погоду ненав'язливо ЛИШЕ якщо це доречно за темою).\n"
+        f"3. Тема публікації: {topic['prompt_focus']}\n"
+        "4. Точні тарифи сервісу: Kärcher Puzzi 8/1 — 600 грн/доба, Santoemma Sabrina SW15 — 650 грн/доба (порція 80 г RM 760 у комплекті), "
+        "Пароочисник Kärcher SC 2 — 400 грн/доба, Робот для вікон Hobot — 450 грн/доба, Турбосушка Dri-Eaz Dri-Pod — 350 грн/доба "
+        "(+250 грн у комбо з пилососом), Озонатор YATO — 350 грн/доба, Піногенератор Kwazar 2 л — +100 грн до пилососа; "
+        "готові хім-набори Chemspec/Koch Chemie — від 110 до 340 грн.\n"
+        "5. У кінці вкажи телефон 098 521 02 04, сайт https://proclean-drohobych.netlify.app та 5–7 локальних хештегів (#дрогобич #трускавець #борислав тощо).\n"
+        "6. Обсяг 850–1300 символів, короткі абзаци з відступами, без води й без капслоку, максимум 5 емодзі."
     )
 
-    main_photo_path = os.path.join("images", "assets", rubric["main_photo"])
-    if not os.path.exists(main_photo_path):
-        main_photo_path = os.path.join("images", rubric["main_photo"])
+    payload = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.75, "maxOutputTokens": 900},
+    }).encode("utf-8")
 
-    if os.path.exists(main_photo_path):
-        im_main = Image.open(main_photo_path).convert("RGB")
-        im_main.thumbnail((996, 494), Image.Resampling.LANCZOS)
-        paste_x = 32 + (1016 - im_main.width) // 2
-        paste_y = card_top + (514 - im_main.height) // 2
-        canvas.paste(im_main, (paste_x, paste_y))
+    for model_name in models_to_try:
+        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        req = urllib.request.Request(endpoint, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                res = json.loads(resp.read().decode("utf-8"))
+            text = res.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+            if len(text) > 180:
+                print(f"Унікальний текст згенеровано через {model_name}!")
+                return text
+        except urllib.error.HTTPError as he:
+            print(f"Модель {model_name} повернула HTTP {he.code}, пробуємо наступну...")
+        except Exception as ex:
+            print(f"Помилка {model_name}: {ex}")
 
-    mini_name = rubric.get("mini_badge_img")
-    mini_path = os.path.join("images", "assets", mini_name) if mini_name else None
-    if mini_path and os.path.exists(mini_path):
-        draw.rounded_rectangle([810, card_bottom - 155, 1032, card_bottom - 14], radius=18, fill=(255, 255, 255), outline=(56, 189, 248), width=3)
-        im_mini = Image.open(mini_path).convert("RGB")
-        if im_mini.height > 100:
-            im_mini = im_mini.crop((0, 18, im_mini.width, im_mini.height))
-        im_mini.thumbnail((196, 120), Image.Resampling.LANCZOS)
-        canvas.paste(im_mini, (810 + (222 - im_mini.width) // 2, (card_bottom - 155) + (141 - im_mini.height) // 2))
-
-    wrapped_sub = textwrap.wrap(strip_non_bmp(rubric["subline"]), width=62)[:2]
-    y_sub = 802
-    for line in wrapped_sub:
-        draw.text((38, y_sub), line, font=f_sub, fill=(226, 232, 240))
-        y_sub += 32
-
-    draw.rounded_rectangle([32, 878, 1048, 962], radius=18, fill=(250, 204, 21))
-    price_clean = strip_non_bmp(rubric["price_tag"])
-    draw.text((54, 903), f">> {price_clean}", font=f_price, fill=(15, 23, 42))
-
-    draw.text(
-        (38, 982),
-        "Тел / Viber / TG: 098-521-02-04  •  Дрогобич • Трускавець • Борислав • Стебник",
-        font=f_footer,
-        fill=(56, 189, 248),
-    )
-    draw.text(
-        (38, 1020),
-        "Онлайн-калькулятор: proclean-drohobych.netlify.app",
-        font=f_footer,
-        fill=(248, 250, 252),
-    )
-
-    canvas.save(out_path, quality=94)
-    print(f"Згенеровано нову фірмову картку з реальною технікою та погодою: {out_path}")
+    return topic["fallback_text"]
 
 
-def commit_and_push_generated_image(rel_image_path: str) -> bool:
+def git_commit_and_push_card(card_path: Path) -> str:
+    repo = get_env_any("GITHUB_REPOSITORY", default="procleanrentua-wq/proclean-autoposter")
+    branch = get_env_any("GITHUB_REF_NAME", default="main")
+    rel_card = card_path.relative_to(BASE_DIR).as_posix()
+
     try:
-        subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
-        subprocess.run(["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"], check=True)
-        subprocess.run(["git", "add", rel_image_path], check=True)
-        subprocess.run(["git", "commit", "-m", f"Update daily smart card: {rel_image_path}"], check=False)
-        subprocess.run(["git", "pull", "--rebase"], check=False)
-        subprocess.run(["git", "push"], check=True)
-        print("Свіжу картку дня збережено в GitHub репозиторії! Чекаємо 5 с на оновлення CDN...")
-        time.sleep(5)
-        return True
-    except Exception as exc:
-        print(f"Не вдалося запушити картинку в git ({exc}).")
-        return False
+        subprocess.run(["git", "config", "user.name", "PRO-CLEAN AutoPoster"], cwd=BASE_DIR, check=False)
+        subprocess.run(["git", "config", "user.email", "actions@github.com"], cwd=BASE_DIR, check=False)
+        subprocess.run(["git", "add", rel_card], cwd=BASE_DIR, check=True)
+        diff = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=BASE_DIR)
+        if diff.returncode != 0:
+            subprocess.run(["git", "commit", "-m", f"Update daily smart card: {rel_card}"], cwd=BASE_DIR, check=True)
+            subprocess.run(["git", "pull", "--rebase", "origin", branch], cwd=BASE_DIR, check=False)
+            subprocess.run(["git", "push", "origin", f"HEAD:{branch}"], cwd=BASE_DIR, check=True)
+            time.sleep(3)
+    except Exception as e:
+        print(f"Примітка git push: {e}")
+
+    return f"https://raw.githubusercontent.com/{repo}/{branch}/{rel_card}?v={int(time.time())}"
 
 
-def publish_to_facebook_page_binary(page_id: str, access_token: str, local_image_path: str, caption: str) -> dict:
-    """Завантажує фото напряму бінарним файлом (multipart/form-data) через актуальний Graph API v27.0!"""
-    endpoint = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}/photos"
+def publish_to_facebook_page(page_id: str, token: str, card_path: Path, caption: str) -> dict:
     boundary = f"----ProCleanBoundary{uuid.uuid4().hex}"
-
-    with open(local_image_path, "rb") as f:
-        img_bytes = f.read()
-
     body = io.BytesIO()
-    for field_name, field_val in [("caption", caption), ("access_token", access_token)]:
+
+    def write_field(name: str, value: str):
         body.write(f"--{boundary}\r\n".encode("utf-8"))
-        body.write(f'Content-Disposition: form-data; name="{field_name}"\r\n\r\n'.encode("utf-8"))
-        body.write(field_val.encode("utf-8"))
-        body.write(b"\r\n")
+        body.write(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        body.write(f"{value}\r\n".encode("utf-8"))
+
+    write_field("caption", caption)
+    write_field("published", "true")
+    write_field("access_token", token)
 
     body.write(f"--{boundary}\r\n".encode("utf-8"))
     body.write(b'Content-Disposition: form-data; name="source"; filename="daily_smart_card.jpg"\r\n')
     body.write(b"Content-Type: image/jpeg\r\n\r\n")
-    body.write(img_bytes)
+    body.write(card_path.read_bytes())
     body.write(f"\r\n--{boundary}--\r\n".encode("utf-8"))
 
+    fb_url = f"https://graph.facebook.com/v21.0/{page_id}/photos"
     req = urllib.request.Request(
-        endpoint,
+        fb_url,
         data=body.getvalue(),
         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
         method="POST",
     )
+    with urllib.request.urlopen(req, timeout=40) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def discover_ig_user_id(page_id: str, token: str) -> str:
+    url = f"https://graph.facebook.com/v21.0/{page_id}?fields=instagram_business_account&access_token={urllib.parse.quote(token)}"
     try:
-        with urllib.request.urlopen(req, timeout=45) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        err_json = exc.read().decode("utf-8", errors="replace")
-        print(f"❌ Детальна відповідь Facebook API (HTTP {exc.code}): {err_json}")
-        raise
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data.get("instagram_business_account", {}).get("id", "")
+    except Exception:
+        return ""
 
 
-def publish_to_instagram_business(ig_user_id: str, access_token: str, image_url: str, caption: str) -> dict:
-    create_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_user_id}/media"
-    create_data = urllib.parse.urlencode({
+def publish_to_instagram(ig_user_id: str, token: str, image_url: str, caption: str) -> dict | None:
+    if not ig_user_id:
+        print("Instagram акаунт не прив'язаний або IG_USER_ID не задано — пропускаємо IG.")
+        return None
+
+    create_url = f"https://graph.facebook.com/v21.0/{ig_user_id}/media"
+    ig_caption = caption.replace(
+        "https://proclean-drohobych.netlify.app",
+        "proclean-drohobych.netlify.app (посилання в шапці профілю)",
+    )
+    params = urllib.parse.urlencode({
         "image_url": image_url,
-        "caption": caption,
-        "access_token": access_token,
+        "caption": ig_caption,
+        "access_token": token,
     }).encode("utf-8")
-    req1 = urllib.request.Request(create_url, data=create_data, method="POST")
-    try:
-        with urllib.request.urlopen(req1, timeout=35) as resp1:
-            container_info = json.loads(resp1.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        err_json = exc.read().decode("utf-8", errors="replace")
-        print(f"❌ Детальна відповідь Instagram Media API (HTTP {exc.code}): {err_json}")
-        raise
 
-    creation_id = container_info["id"]
-    print(f"Instagram медіа-контейнер створено: {creation_id}. Чекаємо 10 секунд на обробку...")
-    time.sleep(10)
+    req = urllib.request.Request(create_url, data=params, method="POST")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        creation = json.loads(resp.read().decode("utf-8"))
+    creation_id = creation.get("id")
+    if not creation_id:
+        raise RuntimeError(f"Instagram не повернув creation_id: {creation}")
 
-    publish_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_user_id}/media_publish"
-    publish_data = urllib.parse.urlencode({
+    status_url = f"https://graph.facebook.com/v21.0/{creation_id}?fields=status_code&access_token={urllib.parse.quote(token)}"
+    for _ in range(10):
+        time.sleep(3)
+        try:
+            with urllib.request.urlopen(status_url, timeout=15) as sresp:
+                sdata = json.loads(sresp.read().decode("utf-8"))
+            if sdata.get("status_code") == "FINISHED":
+                break
+        except Exception:
+            pass
+
+    pub_url = f"https://graph.facebook.com/v21.0/{ig_user_id}/media_publish"
+    pub_params = urllib.parse.urlencode({
         "creation_id": creation_id,
-        "access_token": access_token,
+        "access_token": token,
     }).encode("utf-8")
-    req2 = urllib.request.Request(publish_url, data=publish_data, method="POST")
-    try:
-        with urllib.request.urlopen(req2, timeout=35) as resp2:
-            return json.loads(resp2.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        err_json = exc.read().decode("utf-8", errors="replace")
-        print(f"❌ Детальна відповідь Instagram Publish API (HTTP {exc.code}): {err_json}")
-        raise
+    preq = urllib.request.Request(pub_url, data=pub_params, method="POST")
+    with urllib.request.urlopen(preq, timeout=30) as presp:
+        return json.loads(presp.read().decode("utf-8"))
 
 
 def main():
-    now_utc = datetime.datetime.now(datetime.timezone.utc)
-    now_kyiv = now_utc + datetime.timedelta(hours=2)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
 
-    day_of_year = now_kyiv.timetuple().tm_yday
-    slot = 0 if now_kyiv.hour < 14 else 1
-    idx_str = os.environ.get("FORCE_TOPIC_INDEX", "").strip()
-    rubric_index = int(idx_str) if idx_str.isdigit() else ((day_of_year * 2 + slot) % len(RUBRICS))
-    rubric = RUBRICS[rubric_index % len(RUBRICS)]
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--topic", "-t", default=None)
+    parser.add_argument("pos_topic", nargs="?", default=None)
+    args, _ = parser.parse_known_args()
 
-    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    fb_page_id = os.environ.get("FB_PAGE_ID", "").strip()
-    ig_user_id = os.environ.get("IG_USER_ID", "").strip()
-    meta_token = os.environ.get("META_PAGE_ACCESS_TOKEN", "").strip()
-    github_repo = os.environ.get("GITHUB_REPOSITORY", "procleanrentua-wq/proclean-autoposter").strip()
-    branch = os.environ.get("GITHUB_REF_NAME", "main").strip()
+    now_kyiv = datetime.now(KYIV_TZ)
+    topic_idx, topic = choose_topic(now_kyiv, args.topic or args.pos_topic)
+    weather_str = fetch_drohobych_weather()
 
-    weather = get_drohobych_weather()
-    cal = get_ukrainian_calendar_context(now_kyiv)
+    print(f"=== Рубрика #{topic_idx + 1}: {topic['headline']} ({now_kyiv.strftime('%Y-%m-%d %H:%M')} Kyiv) ===")
 
-    print(f"=== Рубрика #{rubric_index + 1} ({rubric['badge']}): {rubric['headline']} ===")
-    print(f"Погода в Дрогобичі: {weather['context_str']}")
-    print(f"Календар: {cal['calendar_summary']}")
+    card_path = render_editorial_card(topic)
+    public_img_url = git_commit_and_push_card(card_path)
 
-    caption = generate_live_caption_with_gemini(rubric, weather, cal, gemini_key)
+    gemini_key = get_env_any("GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_KEY")
+    caption = generate_caption_with_gemini(gemini_key, topic, weather_str, now_kyiv)
     print("\n--- ЗГЕНЕРОВАНИЙ ЖИВИЙ ТЕКСТ ПОСТА ---\n")
     print(caption)
     print("\n--------------------------------------\n")
 
-    os.makedirs("images", exist_ok=True)
-    generated_rel_path = "images/daily_smart_card.jpg"
-    build_hybrid_card_image(rubric, weather, cal, generated_rel_path)
+    meta_token = get_env_any("META_ACCESS_TOKEN", "FB_PAGE_ACCESS_TOKEN", "FB_ACCESS_TOKEN", "FACEBOOK_ACCESS_TOKEN", "PAGE_ACCESS_TOKEN")
+    fb_page_id = get_env_any("FB_PAGE_ID", "FACEBOOK_PAGE_ID", "META_PAGE_ID", "PAGE_ID")
+    ig_user_id = get_env_any("IG_USER_ID", "IG_ACCOUNT_ID", "IG_BUSINESS_ID", "INSTAGRAM_USER_ID", "INSTAGRAM_BUSINESS_ACCOUNT_ID")
 
-    cache_bust = int(time.time())
-    if os.environ.get("GITHUB_ACTIONS") == "true" and commit_and_push_generated_image(generated_rel_path):
-        image_url = f"https://raw.githubusercontent.com/{github_repo}/{branch}/{generated_rel_path}?v={cache_bust}"
-    else:
-        image_url = f"https://raw.githubusercontent.com/{github_repo}/{branch}/images/01_park_tekhniky.jpg"
+    if not meta_token or not fb_page_id:
+        raise RuntimeError("Не знайдено секретів META_ACCESS_TOKEN або FB_PAGE_ID у GitHub Secrets!")
 
-    print(f"URL зображення для Instagram: {image_url}")
+    fb_res = publish_to_facebook_page(fb_page_id, meta_token, card_path, caption)
+    print(f"✅ Опубліковано на Facebook Page: {fb_res}")
 
-    if not meta_token:
-        print("Тестовий запуск (DRY RUN): META_PAGE_ACCESS_TOKEN не задано.")
-        sys.exit(0)
+    if not ig_user_id:
+        ig_user_id = discover_ig_user_id(fb_page_id, meta_token)
 
-    errors = []
-
-    if fb_page_id:
-        print(f"Публікуємо напряму бінарне фото на Facebook Page ({fb_page_id})...")
-        try:
-            fb_res = publish_to_facebook_page_binary(fb_page_id, meta_token, generated_rel_path, caption)
-            print("✅ Успішно опубліковано у Facebook! ID:", fb_res.get("id"))
-        except Exception as exc:
-            errors.append(f"Facebook: {exc}")
-
-    if ig_user_id:
-        print(f"Публікуємо в Instagram Business ({ig_user_id})...")
-        try:
-            ig_res = publish_to_instagram_business(ig_user_id, meta_token, image_url, caption)
-            print("✅ Успішно опубліковано в Instagram! ID:", ig_res.get("id"))
-        except Exception as exc:
-            errors.append(f"Instagram: {exc}")
-
-    if errors:
-        print("\n⚠️ Виникли помилки під час публікації:")
-        for e in errors:
-            print(" -", e)
-        sys.exit(1)
+    try:
+        ig_res = publish_to_instagram(ig_user_id, meta_token, public_img_url, caption)
+        if ig_res:
+            print(f"✅ Опубліковано в Instagram: {ig_res}")
+    except urllib.error.HTTPError as he:
+        print(f"⚠️ Примітка Instagram ({he.code}): {he.read().decode('utf-8', errors='ignore')}")
+    except Exception as e:
+        print(f"⚠️ Примітка Instagram: {e}")
 
 
 if __name__ == "__main__":
